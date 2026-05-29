@@ -1,0 +1,11 @@
+# .gitignore content — paste karo
+.env
+.env.*
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*.egg-info/
+dist/
+.pytest_cache/
