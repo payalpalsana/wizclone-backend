@@ -1,0 +1,190 @@
+﻿Diagnose log at 2026-06-02T10:10:23Z
+
+AppPath: C:\Program Files\Git\mingw64\bin\git-credential-manager.exe
+InstallDir: C:\Program Files\Git\mingw64\bin\
+Version: 2.7.3+5fa7116896c82164996a609accd1c5ad90fe730a
+
+------------
+Diagnostic: Environment
+Skipped: False
+Success: True
+Exception: None
+Log:
+OSType: Windows
+OSVersion: 10.0 (build 22000)
+Reading environment variables... OK
+ Variables:
+OneDriveConsumer=C:\Users\os\OneDrive
+ProgramFiles(x86)=C:\Program Files (x86)
+MSYSTEM=MINGW64
+ProgramW6432=C:\Program Files
+ChocolateyInstall=C:\ProgramData\chocolatey
+PROCESSOR_IDENTIFIER=Intel64 Family 6 Model 158 Stepping 9, GenuineIntel
+TMP=C:\Users\os\AppData\Local\Temp
+PROCESSOR_ARCHITECTURE=AMD64
+Path=C:/Program Files/Git/mingw64/libexec/git-core;C:\Program Files\Git\mingw64\bin;C:\Program Files\Git\usr\bin;C:\Users\os\bin;C:\Program Files\Eclipse Adoptium\jdk-17.0.18.8-hotspot\bin;C:\Program Files\Eclipse Adoptium\jdk-25.0.2.10-hotspot\bin;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;C:\os\sqlite;C:\Users\os\OneDrive\Desktop\MySQL 9.6;C:\Program Files\Git\cmd;C:\Program Files\PostgreSQL\18\bin;C:\Program Files\Memurai\;C:\Users\os\AppData\Local\nvm;C:\nvm4w\nodejs;C:\Program Files\MySQL\MySQL Shell 8.0\bin\;C:\Users\os\.local\bin;C:\Users\os\AppData\Local\Microsoft\WindowsApps;C:\Users\Public\flutter\bin;C:\Users\os\AppData\Local\Pub\Cache\bin;C:\Users\os\AppData\Local\Programs\Microsoft VS Code\bin;C:\Program Files\JetBrains\PyCharm 2026.1\bin;C:\Users\os\AppData\Local\Programs\Python\Python311;C:\Users\os\AppData\Local\Programs\Python\Python311\Scripts;C:\Users\os\AppData\Roaming\Python\Python311\Scripts;C:\Users\os\AppData\Roaming\npm;C:\nvm4w;C:\Users\os\AppData\Roaming\nvm\v20.20.2\nod
+USERPROFILE=C:\Users\os
+PROCESSOR_REVISION=9e09
+TMPDIR=C:\Users\os\AppData\Local\Temp
+ChocolateyLastPathUpdate=134164955884785228
+FPS_BROWSER_APP_PROFILE_STRING=Internet Explorer
+FPS_BROWSER_USER_PROFILE_STRING=Default
+LOGONSERVER=\\DESKTOP-IOBBVHB
+TEMP=C:\Users\os\AppData\Local\Temp
+USERNAME=os
+SystemRoot=C:\Windows
+CHROME_CRASHPAD_PIPE_NAME=\\.\pipe\crashpad_16408_TXQRFESCHNBMPVDW
+GIT_EXEC_PATH=C:/Program Files/Git/mingw64/libexec/git-core
+PLINK_PROTOCOL=ssh
+OneDrive=C:\Users\os\OneDrive
+USERDOMAIN_ROAMINGPROFILE=DESKTOP-IOBBVHB
+CommonProgramFiles=C:\Program Files\Common Files
+ProgramData=C:\ProgramData
+LC_CTYPE=C.UTF-8
+HOMEPATH=\Users\os
+COMPUTERNAME=DESKTOP-IOBBVHB
+ALLUSERSPROFILE=C:\ProgramData
+CommonProgramW6432=C:\Program Files\Common Files
+TERM=xterm-256color
+NVM_HOME=C:\Users\os\AppData\Local\nvm
+DriverData=C:\Windows\System32\Drivers\DriverData
+HOMEDRIVE=C:
+windir=C:\Windows
+GIT_TRACE2_PARENT_SID=46dcab2a-b04b-4fec-ab84-35fb8801b305
+SystemDrive=C:
+NUMBER_OF_PROCESSORS=4
+OS=Windows_NT
+ProgramFiles=C:\Program Files
+ComSpec=C:\Windows\system32\cmd.exe
+PATHEXT=.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC
+HOME=C:\Users\os
+PSModulePath=%ProgramFiles%\WindowsPowerShell\Modules;C:\Windows\system32\WindowsPowerShell\v1.0\Modules
+JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-17.0.18.8-hotspot
+PROMPT=$P$G
+NVM_SYMLINK=C:\nvm4w\nodejs
+APPDATA=C:\Users\os\AppData\Roaming
+USERDOMAIN=DESKTOP-IOBBVHB
+PROCESSOR_LEVEL=6
+LOCALAPPDATA=C:\Users\os\AppData\Local
+PyCharm=C:\Program Files\JetBrains\PyCharm 2026.1\bin
+CommonProgramFiles(x86)=C:\Program Files (x86)\Common Files
+COLORTERM=truecolor
+PUBLIC=C:\Users\Public
+
+
+------------
+Diagnostic: File system
+Skipped: False
+Success: True
+Exception: None
+Log:
+Temporary directory is 'C:\Users\os\AppData\Local\Temp\'...
+Checking basic file I/O...
+Writing to temporary file 'C:\Users\os\AppData\Local\Temp\e6f0439f9cfbe342f3bf9c1d'... OK
+Reading from temporary file 'C:\Users\os\AppData\Local\Temp\e6f0439f9cfbe342f3bf9c1d'... OK
+Deleting temporary file 'C:\Users\os\AppData\Local\Temp\e6f0439f9cfbe342f3bf9c1d'... OK
+Testing IFileSystem instance...
+UserHomePath: C:\Users\os
+UserDataDirectoryPath: C:\Users\os\.gcm
+GetCurrentDirectory(): D:\wizclone-backend
+
+------------
+Diagnostic: Networking
+Skipped: False
+Success: True
+Exception: None
+Log:
+Checking networking and HTTP stack...
+Creating HTTP client... OK
+IsNetworkAvailable: True
+Sending HEAD request to http://example.com...Sending HEAD request to https://example.com... OK
+ OK
+Acquiring free TCP port... OK
+Testing local HTTP loopback connections...
+Creating new HTTP listener for http://localhost:58661/... OK
+Waiting for loopback connection... OK
+Writing response... OK
+Waiting for response data... OK
+Loopback connection data OK
+
+------------
+Diagnostic: Git
+Skipped: False
+Success: True
+Exception: None
+Log:
+Getting Git version... OK
+Git version is '2.54.0.windows.1'
+Locating current repository...Git repository at 'D:/wizclone-backend/.git'
+ OK
+Listing all Git configuration... OK
+Git configuration:
+file:C:/Program Files/Git/etc/gitconfig	diff.astextplain.textconv=astextplain
+file:C:/Program Files/Git/etc/gitconfig	filter.lfs.clean=git-lfs clean -- %f
+file:C:/Program Files/Git/etc/gitconfig	filter.lfs.smudge=git-lfs smudge -- %f
+file:C:/Program Files/Git/etc/gitconfig	filter.lfs.process=git-lfs filter-process
+file:C:/Program Files/Git/etc/gitconfig	filter.lfs.required=true
+file:C:/Program Files/Git/etc/gitconfig	http.sslbackend=schannel
+file:C:/Program Files/Git/etc/gitconfig	core.autocrlf=true
+file:C:/Program Files/Git/etc/gitconfig	core.fscache=true
+file:C:/Program Files/Git/etc/gitconfig	core.symlinks=false
+file:C:/Program Files/Git/etc/gitconfig	pull.rebase=false
+file:C:/Program Files/Git/etc/gitconfig	credential.helper=manager
+file:C:/Program Files/Git/etc/gitconfig	credential.https://dev.azure.com.usehttppath=true
+file:C:/Program Files/Git/etc/gitconfig	init.defaultbranch=master
+file:C:/Users/os/.gitconfig	safe.directory=D:/Mosadiq/e_commerce_application
+file:C:/Users/os/.gitconfig	safe.directory=D:/Mosadiq/bycle_fancy_app
+file:C:/Users/os/.gitconfig	safe.directory=*
+file:C:/Users/os/.gitconfig	user.name=payalpalsana
+file:C:/Users/os/.gitconfig	user.email=developertest1206@gmail.com
+file:.git/config	core.repositoryformatversion=0
+file:.git/config	core.filemode=false
+file:.git/config	core.bare=false
+file:.git/config	core.logallrefupdates=true
+file:.git/config	core.symlinks=false
+file:.git/config	core.ignorecase=true
+file:.git/config	user.name=payalpalsana
+file:.git/config	user.email=payal@tuesdaywizards.com
+file:.git/config	credential.helper=
+file:.git/config	remote.origin.url=git@github.com:payalpalsana/wizclone-backend.git
+file:.git/config	remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*
+file:.git/config	branch.main.remote=origin
+file:.git/config	branch.main.merge=refs/heads/main
+file:.git/config	branch.main.vscode-merge-base=origin/main
+
+
+------------
+Diagnostic: Credential storage
+Skipped: False
+Success: True
+Exception: None
+Log:
+ICredentialStore instance is of type: CredentialStore
+Writing test credential... OK
+Reading test credential... OK
+Deleting test credential... OK
+
+------------
+Diagnostic: Microsoft authentication (AAD/MSA)
+Skipped: False
+Success: True
+Exception: None
+Log:
+Broker is not enabled.
+Flow type is: Auto
+Gathering MSAL token cache data... OK
+CacheDirectory: C:\Users\os\AppData\Local\.IdentityService
+CacheFileName: msal.cache
+CacheFilePath: C:\Users\os\AppData\Local\.IdentityService\msal.cache
+Creating cache helper... OK
+Verifying MSAL token cache persistence... OK
+
+------------
+Diagnostic: GitHub API
+Skipped: False
+Success: True
+Exception: None
+Log:
+Using 'https://github.com/' as API target.
+Querying '/meta' endpoint... OK
+
