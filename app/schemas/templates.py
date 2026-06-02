@@ -1,7 +1,7 @@
 # app/schemas/templates.py
 
 from pydantic import BaseModel
-from typing import Optional, List
+from typing   import Optional, List
 from datetime import datetime
 
 
@@ -28,19 +28,20 @@ class SubitemResponse(BaseModel):
 
 class SubitemUpdate(BaseModel):
     """
-    Used when updating subitems in a template.
-    Logic:
-    - If 'id' exists → update existing subitem
-    - If 'id' is None → create new subitem
+    id present  → update existing subitem
+    id absent   → create new subitem
     """
     id:         Optional[str] = None
     name:       str
     sort_order: Optional[int] = None
 
 
-# ─────────────────────────────────────────
-# Template schemas (main template object)
-# ─────────────────────────────────────────
+class SubitemResponse(BaseModel):
+    id:         str
+    name:       str
+    sort_order: int
+
+
 class TemplateCreateRequest(BaseModel):
     """
     Request body for creating a new template.
@@ -50,13 +51,7 @@ class TemplateCreateRequest(BaseModel):
 
 
 class TemplateUpdateRequest(BaseModel):
-    """
-    Request body for updating a template.
-    
-    All fields are optional:
-    - If not provided → no change
-    """
-    name:     Optional[str]          = None
+    name:     Optional[str]              = None
     subitems: Optional[List[SubitemUpdate]] = None
 
 

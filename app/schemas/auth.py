@@ -1,24 +1,42 @@
 # app/schemas/auth.py
-
-# Pydantic is used to define request/response data structure
 from pydantic import BaseModel
-
-# ─────────────────────────────────────────
-# OAuthResponse Schema
-# This model defines how your API response will look after OAuth (login/install) process
-# ─────────────────────────────────────────
-class OAuthResponse(BaseModel):
-    success: bool
-    message: str
+from typing   import Optional
 
 
 # ─────────────────────────────────────────
-# VerifyRequest Schema
-# This model defines what data frontend must send
-# when calling /api/auth/verify
+# POST /api/auth/verify
+# Called on every app load
 # ─────────────────────────────────────────
+
 class VerifyRequest(BaseModel):
+    """
+    Frontend sends this on every app load.
+
+    How frontend gets these values:
+        sessionToken → monday.get("sessionToken").then(res => res.data)
+        accountId    → from monday context or decoded sessionToken
+        userId       → from monday context or decoded sessionToken
+        workspaceId  → from monday context
+    """
     sessionToken: str
-    accountId: str
-    userId: str
-    workspaceId: int
+    accountId:    int
+    userId:       int
+    workspaceId:  int
+
+
+class VerifyResponse(BaseModel):
+    """
+    has_oauth = False → no access token stored yet
+                        frontend shows "Connect Workspace" button
+                        user clicks → browser goes to GET /api/auth/authorization
+
+    has_oauth = True  → access token exists in DB
+                        app loads normally, no OAuth needed
+    """
+    success:        bool
+    message:        str
+    has_oauth:      bool
+    workspace_uuid: Optional[str]  = None   # internal UUID for all other API calls
+    workspace_id: Optional[int]  = None
+    user_id:      Optional[int]  = None
+    is_admin:       Optional[bool] = None

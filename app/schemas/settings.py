@@ -1,41 +1,93 @@
 # app/schemas/settings.py
 
 from pydantic import BaseModel
-from typing import Optional
+from typing   import Optional, List
 
 
 # ─────────────────────────────────────────
-# Response Model (GET API)
+# Shared board model
 # ─────────────────────────────────────────
+
+class BoardSetting(BaseModel):
+    """Used in GET response to show each board's current state."""
+    board_id:      int
+    board_enabled: bool = True
+
+
+# ─────────────────────────────────────────
+# GET /api/settings/{workspaceId}
+# ─────────────────────────────────────────
+
 class SettingsResponse(BaseModel):
     """
-    This model is used when frontend calls:
-    GET /settings/{workspaceId}
+    Returned when frontend loads the Settings page.
 
-    It tells frontend:
-    - Which board is selected
-    - What AI sensitivity is set
-    - Whether automation is ON/OFF
+    boards             → all monitored boards with their user_enabled state
+    sensitivity        → STRICT | BALANCED | LOOSE
+    automation_enabled → global on/off toggle for the whole workspace
     """
     workspace_id:       str
-    board_id:           Optional[int]  = None
-    sensitivity:        str            = "BALANCED"
-    automation_enabled: bool           = True
-    board_enabled:      bool           = True
+    boards:             List[BoardSetting] = []
+    sensitivity:        str               = "BALANCED"
+    automation_enabled: bool              = True
 
 
 # ─────────────────────────────────────────
-# Request Model (POST API)
+# POST /api/settings/{workspaceId}
+# Save sensitivity + global toggle only
 # ─────────────────────────────────────────
+
 class SettingsSaveRequest(BaseModel):
     """
-    This model is used when frontend calls:
-    POST /settings/{workspaceId}
+    Saves workspace-level settings only.
+    Board toggles are handled by dedicated activate/deactivate endpoints.
 
-    Frontend sends this data when user clicks:
-    "Save Settings"
+    sensitivity        → STRICT | BALANCED | LOOSE
+    automation_enabled → global toggle
+                         false → disable all boards + delete all webhooks
+                         true  → re-enable boards where user_enabled=true
     """
-    board_id:           Optional[int]  = None
     sensitivity:        Optional[str]  = None
     automation_enabled: Optional[bool] = None
-    board_enabled:      Optional[bool] = None
+
+
+# ─────────────────────────────────────────
+# POST /api/boards/{workspaceId}/activate
+# ─────────────────────────────────────────
+
+class BoardActivateRequest(BaseModel):
+    """
+    Frontend sends board_id + sessionToken when user enables a board.
+
+    sessionToken → verify JWT → extract workspace UUID internally
+    board_id     → which board to activate
+    board_name   → optional, saved for display in UI
+    """
+    sessionToken: str
+    board_id:     int
+    board_name:   Optional[str] = None
+
+
+class BoardActivateResponse(BaseModel):
+    success:    bool
+    message:    str
+    board_id:   int
+    webhook_id: Optional[str] = None
+
+
+# ─────────────────────────────────────────
+# POST /api/boards/{workspaceId}/deactivate
+# ─────────────────────────────────────────
+
+class BoardDeactivateRequest(BaseModel):
+    """
+    Frontend sends board_id + sessionToken when user disables a board.
+    """
+    sessionToken: str
+    board_id:     int
+
+
+class BoardDeactivateResponse(BaseModel):
+    success:  bool
+    message:  str
+    board_id: int

@@ -1,53 +1,42 @@
 # app/services/webhook_service.py
 
 # ─────────────────────────────────────────────────────────────
-# This service handles:
-# 1. Creating webhook (automation) on monday.com
-# 2. Deleting webhook (disabling automation)
+# monday.com Webhook Management
 #
-# Important:
-# monday.com does NOT support pause/disable webhook
-# So:
-#   Disable = delete webhook
-#   Enable  = create new webhook
+# monday.com does NOT support pausing a webhook.
+# The only options are: create or delete.
+#
+# So our logic is:
+#   Board enabled  → create_webhook()  (registers automation on monday)
+#   Board disabled → delete_webhook()  (removes automation from monday)
 # ─────────────────────────────────────────────────────────────
 
 import httpx
 from app.core.config import settings
 
-
-# Base URL for monday.com GraphQL API
-MONDAY_API_URL = settings.monday_api_url
-
-# Event type → triggers when a new item is created on board
-WEBHOOK_EVENT = "create_item"
+MONDAY_API_URL  = settings.monday_api_url
+WEBHOOK_EVENT   = "create_item"    # fires when a new item is created on the board
 
 
-# ─────────────────────────────────────────
-# create_webhook()
-# ─────────────────────────────────────────
-# Purpose:
-# Create a webhook (automation) on a specific board
-# When new item is created → monday calls our backend URL
-# Returns:
-# webhook_id (int) → used later to delete/update webhook
-# ─────────────────────────────────────────
 async def create_webhook(
     access_token: str,
     board_id:     int,
-    workspace_id: str,
-) -> int:
+    workspace_id: str,   # monday workspace ID (embedded in the callback URL)
+) -> str | None:
     """
-    Creates a webhook on monday.com board.
+    Register a "create_item" webhook on a monday.com board.
 
-    We attach workspace_id in URL so when webhook fires,
-    backend knows which workspace triggered it.
+    The callback URL contains the workspace ID so the receiver
+    knows which workspace this event belongs to without any lookup.
+    URL format: {app_base_url}/webhook/monday?workspaceId={workspace_id}
 
-    Returns webhook ID.
+    Returns webhook_id (str) on success.
+    Returns None if monday.com rejects (e.g. token issue, app not live).
+    Errors are printed but never raised — caller handles None.
     """
 
-    # Build callback URL → where monday will send data
-    webhook_url = f"{settings.app_base_url}/webhook/receive/{workspace_id}"
+    # Build the URL monday.com will POST to when an item is created
+    callback_url = f"{settings.app_base_url}/webhook/monday?workspaceId={workspace_id}"
 
     # GraphQL mutation to create webhook
     mutation = """
@@ -59,64 +48,54 @@ async def create_webhook(
     }
     """
 
-    # Variables for GraphQL query
-    variables = {
-        "boardId": str(board_id),   # board ID must be string
-        "url":     webhook_url,     # our backend endpoint
-        "event":   WEBHOOK_EVENT,   # trigger event
-    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                MONDAY_API_URL,
+                json={
+                    "query":     mutation,
+                    "variables": {
+                        "boardId": str(board_id),
+                        "url":     callback_url,
+                        "event":   WEBHOOK_EVENT,
+                    },
+                },
+                headers={
+                    "Authorization": access_token,
+                    "Content-Type":  "application/json",
+                    "API-Version":   "2024-01",
+                },
+            )
 
-    # Request headers
-    headers = {
-        "Authorization": access_token,  # monday OAuth token
-        "Content-Type":  "application/json",
-        "API-Version":   "2024-01",     # fixed API version
-    }
+        data = response.json()
 
-    # Send request to monday.com
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            MONDAY_API_URL,
-            json={"query": mutation, "variables": variables},
-            headers=headers,
-            timeout=15,
-        )
+        # GraphQL errors (e.g. invalid token, board not found)
+        if "errors" in data:
+            print(f"[webhook_service] create_webhook GraphQL error: {data['errors']}")
+            return None
 
-    # Raise error if request failed
-    response.raise_for_status()
+        webhook_id = data.get("data", {}).get("create_webhook", {}).get("id")
+        if not webhook_id:
+            print(f"[webhook_service] create_webhook: no ID in response: {data}")
+            return None
 
-    # Parse JSON response
-    data = response.json()
+        return str(webhook_id)
 
-    # Extract webhook ID
-    webhook_id = data["data"]["create_webhook"]["id"]
-
-    # Return webhook ID as integer
-    return int(webhook_id)
+    except Exception as e:
+        print(f"[webhook_service] create_webhook exception: {e}")
+        return None
 
 
-# ─────────────────────────────────────────
-# delete_webhook()
-# ─────────────────────────────────────────
-# Purpose:
-# Delete (disable) webhook from monday.com
-#
-# Important:
-# monday.com has NO pause → only delete
-#
-# Returns:
-# True  → success
-# False → failed (but safe to ignore)
-# ─────────────────────────────────────────
 async def delete_webhook(
     access_token: str,
     webhook_id:   str,
 ) -> bool:
     """
-    Deletes a webhook from monday.com.
+    Delete a webhook from monday.com.
 
-    If webhook already deleted → we ignore error
-    and return False (safe handling).
+    Returns True on success.
+    Returns False on failure (safe to ignore — webhook may already be gone).
+    Never raises — caller always gets a bool.
     """
 
     # GraphQL mutation to delete webhook
@@ -129,32 +108,27 @@ async def delete_webhook(
     }
     """
 
-    # Variables
-    variables = {"webhookId": str(webhook_id)}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                MONDAY_API_URL,
+                json={
+                    "query":     mutation,
+                    "variables": {"webhookId": str(webhook_id)},
+                },
+                headers={
+                    "Authorization": access_token,
+                    "Content-Type":  "application/json",
+                    "API-Version":   "2024-01",
+                },
+            )
 
-    # Headers
-    headers = {
-        "Authorization": access_token,
-        "Content-Type":  "application/json",
-        "API-Version":   "2024-01",
-    }
+        if response.status_code != 200:
+            return False
 
-    # Send request
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            MONDAY_API_URL,
-            json={"query": mutation, "variables": variables},
-            headers=headers,
-            timeout=15,
-        )
+        data = response.json()
+        return "errors" not in data
 
-    # Do NOT raise error here
-    # Because webhook might already be deleted → not critical
-    if response.status_code != 200:
+    except Exception as e:
+        print(f"[webhook_service] delete_webhook exception: {e}")
         return False
-
-    # Parse response
-    data = response.json()
-
-    # If GraphQL returns errors → failure
-    return "errors" not in data

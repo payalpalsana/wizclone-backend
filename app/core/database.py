@@ -1,23 +1,39 @@
 # app/core/database.py
-# Supabase client setup
-# Two clients: anon (normal) and admin (bypass RLS)
+# ─────────────────────────────────────────────────────────────
+# Supabase client — single shared admin instance
+#
+# WHY ONE INSTANCE?
+# Creating a new client on every request is expensive.
+# supabase_admin is created once at startup and reused everywhere.
+#
+# HOW TO USE:
+#   from app.core.database import db
+#   result = db.table("workspaces").select("*").execute()
+#
+# In FastAPI routes that need Depends():
+#   from app.core.database import get_db
+#   async def my_route(db = Depends(get_db)): ...
+#
+# In plain helper functions (NOT FastAPI endpoints):
+#   from app.core.database import db
+#   result = db.table(...).execute()
+# ─────────────────────────────────────────────────────────────
 
 from supabase import create_client, Client
-from app.core.config import settings            
+from app.core.config import settings
 
-
-# ── Admin client ──
-# Use for all backend operations
+# ── Single shared admin client ──
 # Service role key bypasses Row Level Security (RLS)
-supabase_admin: Client = create_client(
+# Used for all backend operations
+db: Client = create_client(
     settings.supabase_url,
-    settings.supabase_service_role_key
+    settings.supabase_service_role_key,
 )
 
 
-def get_supabase() -> Client:
+def get_db() -> Client:
     """
-    Dependency function for FastAPI.
-    Used with Depends() to inject DB client.
+    FastAPI dependency — inject db into route handlers.
+    Usage:  async def route(db = Depends(get_db))
     """
-    return supabase_admin
+    return db
