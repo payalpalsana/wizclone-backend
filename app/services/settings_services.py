@@ -1,4 +1,4 @@
-# app/core/helpers.py
+# app/services/settings_service.py
 # ─────────────────────────────────────────────────────────────
 # Shared DB helper functions
 #
@@ -20,7 +20,7 @@ from supabase import Client
 # Workspace helpers
 # ─────────────────────────────────────────
 
-def get_workspace_by_monday_id(monday_workspace_id: str | int, db: Client) -> dict:
+def get_workspace_by_monday_id(monday_workspace_id: str, db: Client) -> dict:
     """
     Resolve monday_workspace_id (external numeric ID) → full workspace row.
 
@@ -35,7 +35,7 @@ def get_workspace_by_monday_id(monday_workspace_id: str | int, db: Client) -> di
     """
     try:
         result = db.table("workspaces") \
-            .select("id, access_token, plan_tier, is_active, is_paused, status") \
+            .select("id, access_token") \
             .eq("monday_workspace_id", str(monday_workspace_id)) \
             .single() \
             .execute()
@@ -48,7 +48,7 @@ def get_workspace_by_monday_id(monday_workspace_id: str | int, db: Client) -> di
     return result.data
 
 
-def get_workspace_uuid(monday_workspace_id: str | int, db: Client) -> str:
+def get_workspace_uuid(monday_workspace_id: str, db: Client) -> str:
     """
     Shorthand — returns just the internal UUID string.
     Use when you only need the UUID and not other workspace fields.
@@ -59,7 +59,6 @@ def get_workspace_uuid(monday_workspace_id: str | int, db: Client) -> str:
 # ─────────────────────────────────────────
 # Template / subitem helpers
 # ─────────────────────────────────────────
-
 def get_subitems_for_template(template_id: str, db: Client) -> list[dict]:
     """
     Fetch all active (non-deleted) subitems for a template,
@@ -87,7 +86,6 @@ def get_subitems_for_template(template_id: str, db: Client) -> list[dict]:
 # ─────────────────────────────────────────
 # Settings helpers
 # ─────────────────────────────────────────
-
 def get_workspace_settings(workspace_uuid: str, db: Client) -> dict | None:
     """
     Fetch workspace_settings row for the given internal UUID.

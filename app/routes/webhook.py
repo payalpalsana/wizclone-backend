@@ -161,6 +161,21 @@ async def receive_webhook(request: Request):
     if not all([event_id, item_id, board_id]):
         return JSONResponse({"status": "ignored", "reason": "missing required fields"})
 
+    # Cross-validate the workspaceId param against the event's accountId
+    # They come from different sources — mismatch means something is wrong
+    if workspace_monday_id and str(account_id) != str(workspace_monday_id):
+        # Look up by workspace_id as a secondary validation
+        try:
+            ws_check = supabase_db.table("workspaces") \
+                .select("monday_account_id") \
+                .eq("monday_workspace_id", workspace_monday_id) \
+                .single() \
+                .execute()
+            if ws_check.data and str(ws_check.data["monday_account_id"]) != str(account_id):
+                return JSONResponse({"status": "ignored", "reason": "workspace/account mismatch"})
+        except Exception:
+            pass  # If check fails, continue — fail open
+
     # ── Step 3: Dedup check ──
     # monday.com guarantees at-least-once delivery — it CAN fire the same event twice.
     # Check webhook_deduplication before doing anything else.
@@ -206,7 +221,7 @@ async def receive_webhook(request: Request):
     # disabled this specific board in WizClone settings.
     try:
         board_result = supabase_db.table("monitored_boards") \
-            .select("is_enabled, webhook_status") \
+            .select("is_enabled, webhook_status, board_name") \
             .eq("workspace_id", workspace_uuid) \
             .eq("board_id",     board_id) \
             .is_("deleted_at",  "null") \
@@ -222,6 +237,8 @@ async def receive_webhook(request: Request):
     if not board_record.get("is_enabled"):
         return JSONResponse({"status": "ignored", "reason": "board disabled"})
 
+    board_name = board_record.get("board_name") or ""
+    
     # ── Step 6: Plan limit check ──
     plan_tier = workspace.get("plan_tier", "FREE")
     if _is_plan_limit_reached(workspace_uuid, plan_tier):
@@ -268,6 +285,7 @@ async def receive_webhook(request: Request):
             "item_id":      item_id,
             "item_name":    item_name,
             "board_id":     board_id,
+            "board_name":   board_name,
             "event_id":     event_id,
             "trigger_type": "WEBHOOK",
             "status":       "NO_MATCH",

@@ -9,5 +9,5 @@ __pycache__/
 *.egg-info/
 dist/
 .pytest_cache/
-Text.txt
 boards.txt
+Untitled-2.txt

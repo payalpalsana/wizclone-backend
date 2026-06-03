@@ -15,12 +15,12 @@ from fastapi import APIRouter, HTTPException, Depends
 
 from datetime import datetime, timezone
 
-from fastapi    import APIRouter, HTTPException, Depends
-from supabase   import Client
+from fastapi import APIRouter, HTTPException, Depends
+from supabase import Client
 
-from app.core.database    import get_db
-from app.core.helpers     import get_workspace_uuid, get_subitems_for_template
-from app.schemas.templates import (
+from app.core.database import get_db
+from app.services.settings_services import get_workspace_uuid, get_subitems_for_template
+from app.schemas.templates_schemas import (
     TemplateCreateRequest, TemplateUpdateRequest,
     TemplateResponse,      TemplatesListResponse,
     SubitemResponse,

@@ -1,48 +1,60 @@
 # app/routes/auth.py
 
 # ─────────────────────────────────────────────────────────────
-# 2 URLs only:
-#
-# URL 1 → GET  /api/auth/authorization
-#          monday.com calls this to start OAuth
-#          → checks if already authorized
-#          → if yes: redirect to backToUrl directly
-#          → if no:  redirect to monday.com OAuth page
-#          → after user approves, monday calls /api/auth/callback
-#          → callback exchanges code → saves access_token to DB
-#          → redirects to backToUrl
-#
+# First time install:
+# ─────────────────
+# monday.com → GET /api/auth/authorization?token=xxx
+#                     ↓
+#             decode token → get accountId, backToUrl
+#                     ↓
+#             check DB → no access_token yet
+#                     ↓
+#             redirect to monday.com OAuth page
+#                     ↓
+#             user approves
+#                     ↓
 
-# get/api/auth/callback here what i want to 
-# URL 2 → POST /api/auth/verify
-#          frontend calls this on every app load
-#          → verifies session token
-#          → checks if access_token exists in DB
-#          → returns has_oauth: true/false
-#          → if has_oauth=true + first load → also saves user + settings
+# monday.com → GET /api/auth/callback?code=xxx&state=xxx
+#                     ↓
+#             exchange code → get access_token
+#                     ↓
+#             save access_token to DB
+#                     ↓
+#             redirect to backToUrl
+#                     ↓
+
+# Every app load (after install):
+# ───────────────────────────────
+# Frontend JS → POST /api/auth/verify
+#               (sessionToken in header)
+#                     ↓
+#               verify token
+#                     ↓
+#               check DB → has access_token?
+#                     ↓
+#               return has_oauth: true/false
 # ─────────────────────────────────────────────────────────────
+
+import token
 
 import jwt
 import httpx
 import urllib.parse
-from fastapi           import APIRouter, HTTPException, Query, Depends
+from fastapi           import APIRouter, HTTPException, Query, Depends, Request
 from fastapi.responses import RedirectResponse
 
 from supabase import Client
 from app.core.database import get_db
 from app.core.config   import settings
-from app.services.auth_service import (
+from app.services.auth_services import (
     _verify_session_token, _verify_authorization_token, _init_user_and_settings
 )
 
-from app.schemas.auth  import (
+from app.schemas.auth_schemas  import (
     VerifyRequest, VerifyResponse
 )
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
-
-
-
 
 # ═══════════════════════════════════════════════════════════
 # URL 1 — GET /api/auth/authorization
@@ -109,84 +121,73 @@ async def authorization(token: str = Query(...), db: Client = Depends(get_db)):
     )
 
 
-# # ── Callback (monday.com redirects here after user approves)
-# @router.get("/callback", )
-# async def oauth_callback(
-#     code:  str = Query(...),
-#     state: str|None=None,
-#     db: Client = Depends(get_db)
-# ):
-#     print("=", 80)
-#     print("MONDAY CALLBACK")
-#     print("CODE:", code)
-#     print("STATE:", state)
-#     print("CALLBACK_URL:")
-#     print("=", 80)
-#     """
-#     monday.com sends code + state here after user approves OAuth.
-#     state = original authorization token (contains backToUrl).
 
-#     Flow:
-#     1. Decode state → get accountId + backToUrl
-#     2. Exchange code → access_token
-#     3. Save access_token to DB
-#     4. Redirect user to backToUrl
-#     """
-#     # ── Decode state to get backToUrl
-#     state_data = _verify_authorization_token(state)
-#     if not state_data:
-#         raise HTTPException(status_code=400, detail="Invalid state token")
 
-#     account_id  = state_data.get("accountId")
-#     back_to_url = state_data.get("backToUrl")
+@router.post("/oauth2/authorized", include_in_schema=False)
+async def monday_oauth_authorized(
+    request: Request,
+    db: Client = Depends(get_db)
+):
+    """
+    Monday calls this server-to-server after user clicks Authorize.
+    This is NOT the redirect callback — Monday POSTs the code directly here.
+    """
+    print("=" * 60)
+    print("MONDAY /oauth2/authorized HIT")
 
-#     # ── Exchange code for access_token
-#     try:
-#         async with httpx.AsyncClient(timeout=15) as client:
-#             response = await client.post(
-#                 settings.monday_token_url,
-#                 data={
-#                     "client_id":     settings.monday_client_id,
-#                     "client_secret": settings.monday_client_secret,
-#                     "code":          code,
-#                     "redirect_uri":  f"{settings.app_base_url}/api/auth/callback",
-#                 },
-#             )
-#         response.raise_for_status()
-#         access_token = response.json().get("access_token")
+    body = await request.json()
+    print("BODY:", body)
 
-#         if not access_token:
-#             raise HTTPException(status_code=400, detail="No access token received")
+    code = body.get("code")
+    if not code:
+        raise HTTPException(status_code=400, detail="No code in body")
 
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         raise HTTPException(status_code=502, detail=f"Token exchange failed: {str(e)}")
+    # Exchange code → access_token
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            settings.monday_token_url,
+            data={
+                "client_id":     settings.monday_client_id,
+                "client_secret": settings.monday_client_secret,
+                "code":          code,
+                "redirect_uri":  f"{settings.app_base_url}/api/auth/callback",
+            },
+        )
+    response.raise_for_status()
+    access_token = response.json().get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=400, detail="No access token received")
 
-#     # ── Save access_token to DB
-#     try:
-#         ws_result = db.table("workspaces").upsert(
-#             {
-#                 "monday_account_id":   int(account_id),
-#                 "monday_workspace_id": None,
-#                 "workspace_name":      f"Workspace {account_id}",
-#                 "access_token":        access_token,
-#                 "plan_tier":           "FREE",
-#                 "status":              "ACTIVE",
-#                 "is_active":           True,
-#                 "is_paused":           False,
-#             },
-#             on_conflict="monday_account_id",
-#         ).execute()
+    # Get account_id
+    async with httpx.AsyncClient(timeout=15) as client:
+        res = await client.post(
+            "https://api.monday.com/v2",
+            json={"query": "query { me { account { id } } }"},
+            headers={"Authorization": access_token, "Content-Type": "application/json"},
+        )
+    account_id = res.json()["data"]["me"]["account"]["id"]
 
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"Failed to save token: {str(e)}")
+    # Save to DB
+    db.table("workspaces").upsert(
+        {
+            "monday_account_id":   int(account_id),
+            "monday_workspace_id": None,
+            "workspace_name":      f"Workspace {account_id}",
+            "access_token":        access_token,
+            "plan_tier":           "FREE",
+            "status":              "ACTIVE",
+            "is_active":           True,
+            "is_paused":           False,
+        },
+        on_conflict="monday_account_id",
+    ).execute()
 
-#     # ── Redirect back to monday.com
-#     return RedirectResponse(url=back_to_url)  # ensure absolute URL
+    print("Token saved for account:", account_id)
+    return {"status": "ok"}
 
 
 
+# ═══════════════════════════════════════════════════════════
 @router.get("/callback")
 async def oauth_callback(
     code: str = Query(...),
@@ -312,12 +313,20 @@ async def verify_auth(payload: VerifyRequest, db: Client = Depends(get_db)):
     try:
         ws_result = db.table("workspaces") \
             .select("id, access_token, monday_workspace_id") \
-            .eq("monday_workspace_id", payload.accountId) \
+            .eq("monday_workspace_id", payload.workspaceId) \
             .execute()
         
         workspace = ws_result.data[0] if ws_result.data else None
 
-        # If workspace exists but workspace_id is missing → update it
+        # Fallback: OAuth callback saved by account_id but workspace_id was NULL
+        if not workspace:
+            ws_result2 = db.table("workspaces") \
+                .select("id, access_token, monday_workspace_id") \
+                .eq("monday_account_id", payload.accountId) \
+                .execute()
+            workspace = ws_result2.data[0] if ws_result2.data else None
+
+        # If found via account_id fallback, stamp the workspace_id now
         if workspace and not workspace.get("monday_workspace_id"):
             db.table("workspaces").update({
                 "monday_workspace_id": int(payload.workspaceId)
@@ -334,7 +343,7 @@ async def verify_auth(payload: VerifyRequest, db: Client = Depends(get_db)):
                     "monday_account_id":   int(payload.accountId),
                     "monday_workspace_id": int(payload.workspaceId),
                     "workspace_name":      f"Workspace {payload.workspaceId}",
-                    "access_token":        None,   # no OAuth yet
+                    "access_token":        "",     # empty = no OAuth yet, avoids NOT NULL issue
                     "plan_tier":           "FREE",
                     "status":              "ACTIVE",
                     "is_active":           True,
@@ -357,7 +366,8 @@ async def verify_auth(payload: VerifyRequest, db: Client = Depends(get_db)):
     )
 
     # ── Step 6: Check has_oauth
-    has_oauth = bool(workspace.get("access_token"))
+    token = workspace.get("access_token") or ""
+    has_oauth = bool(token.strip()) and token not in ["", "test-token"]
 
     return VerifyResponse(
         success        = True,
@@ -373,95 +383,39 @@ async def verify_auth(payload: VerifyRequest, db: Client = Depends(get_db)):
 
 
 
-# # ─────────────────────────────────────────
-# # GET /api/auth/authorization
-# # monday.com redirects user here to start OAuth
-# # Token signed with SIGNING SECRET
-# # ─────────────────────────────────────────
-# @router.get("/authorization")
-# async def authorization(code: str = Query(...), db: Client = Depends(get_db)):
-#     """
-#     monday.com calls this when user starts OAuth flow.
-#     Token is JWT signed with Signing Secret.
-#     Contains: userId, accountId, backToUrl
 
-#     Flow:
-#     1. Decode token with signing secret
-#     2. Check if workspace already has access_token in DB
-#     3. If yes → redirect straight to backToUrl (no OAuth needed)
-#     4. If no  → redirect to monday.com OAuth page
-#     """
-
-#     # ── Step 1: Decode authorization token
-#     payload = verify_authorization_token(code)
-#     if not payload:
-#         raise HTTPException(status_code=401, detail="Invalid authorization token")
-
-#     user_id     = payload.get("userId")
-#     account_id  = payload.get("accountId")
-#     back_to_url = payload.get("backToUrl")
-
-#     if not back_to_url:
-#         raise HTTPException(status_code=400, detail="backToUrl missing from token")
-
-#     # ── Step 2: Check if workspace already has access token
-#     try:
-#         ws_result = db.table("workspaces") \
-#             .select("id, access_token") \
-#             .eq("monday_account_id", account_id) \
-#             .execute()
-#         workspace = ws_result.data[0] if ws_result.data else None
-#     except Exception:
-#         workspace = None
-
-#     already_authorized = (
-#         workspace is not None and
-#         workspace.get("access_token") is not None and
-#         workspace.get("access_token") != "test-token"
-#     )
-
-#     # ── Step 3: Already authorized → go back to monday.com directly
-#     if already_authorized:
-#         return RedirectResponse(url=back_to_url)
-
-#     # ── Step 4: Not authorized → redirect to monday.com OAuth
-#     # Pass original token as state so callback can recover backToUrl
-#     # url : 
-#     monday_oauth_url = (
-#         f"{settings.monday_authorize_url}"
-#         f"?client_id={settings.monday_client_id}"
-#         f"&redirect_uri={settings.app_base_url}/api/auth/callback"
-#         f"&scope={REQUIRED_SCOPES.replace(' ', '%20')}"
-#         f"&state={code}"   # pass original token as state
-#     )
-
-#     return RedirectResponse(url=monday_oauth_url)
-
-
-# # ─────────────────────────────────────────
-# # GET /api/auth/callback
-# # monday.com redirects here after user approves OAuth
-# # ─────────────────────────────────────────
-# @router.get("/callback")
+# # ── Callback (monday.com redirects here after user approves)
+# @router.get("/callback", )
 # async def oauth_callback(
 #     code:  str = Query(...),
-#     state: str = Query(...),
+#     state: str|None=None,
 #     db: Client = Depends(get_db)
 # ):
+#     print("=", 80)
+#     print("MONDAY CALLBACK")
+#     print("CODE:", code)
+#     print("STATE:", state)
+#     print("CALLBACK_URL:")
+#     print("=", 80)
 #     """
-#     monday.com sends code + state here after user approves.
-#     state = original authorization token (contains backToUrl)
-#     """
+#     monday.com sends code + state here after user approves OAuth.
+#     state = original authorization token (contains backToUrl).
 
-#     # ── Step 1: Recover backToUrl from state
-#     state_data  = verify_authorization_token(state)
+#     Flow:
+#     1. Decode state → get accountId + backToUrl
+#     2. Exchange code → access_token
+#     3. Save access_token to DB
+#     4. Redirect user to backToUrl
+#     """
+#     # ── Decode state to get backToUrl
+#     state_data = _verify_authorization_token(state)
 #     if not state_data:
 #         raise HTTPException(status_code=400, detail="Invalid state token")
 
 #     account_id  = state_data.get("accountId")
 #     back_to_url = state_data.get("backToUrl")
 
-#     # ── Step 2: Exchange code for access token
+#     # ── Exchange code for access_token
 #     try:
 #         async with httpx.AsyncClient(timeout=15) as client:
 #             response = await client.post(
@@ -474,8 +428,7 @@ async def verify_auth(payload: VerifyRequest, db: Client = Depends(get_db)):
 #                 },
 #             )
 #         response.raise_for_status()
-#         token_data   = response.json()
-#         access_token = token_data.get("access_token")
+#         access_token = response.json().get("access_token")
 
 #         if not access_token:
 #             raise HTTPException(status_code=400, detail="No access token received")
@@ -485,79 +438,28 @@ async def verify_auth(payload: VerifyRequest, db: Client = Depends(get_db)):
 #     except Exception as e:
 #         raise HTTPException(status_code=502, detail=f"Token exchange failed: {str(e)}")
 
-#     # ── Step 3: Save access token to DB
+#     # ── Save access_token to DB
 #     try:
-#         db.table("workspaces") \
-#             .upsert(
-#                 {
-#                     "monday_account_id":   int(account_id),
-#                     "monday_workspace_id": int(account_id),  # placeholder — updated in /init
-#                     "workspace_name":      f"Workspace {account_id}",
-#                     "access_token":        access_token,
-#                     "plan_tier":           "FREE",
-#                     "status":              "ACTIVE",
-#                     "is_active":           True,
-#                     "is_paused":           False,
-#                 },
-#                 on_conflict="monday_account_id",
-#             ) \
-#             .execute()
+#         ws_result = db.table("workspaces").upsert(
+#             {
+#                 "monday_account_id":   int(account_id),
+#                 "monday_workspace_id": None,
+#                 "workspace_name":      f"Workspace {account_id}",
+#                 "access_token":        access_token,
+#                 "plan_tier":           "FREE",
+#                 "status":              "ACTIVE",
+#                 "is_active":           True,
+#                 "is_paused":           False,
+#             },
+#             on_conflict="monday_account_id",
+#         ).execute()
 
 #     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"Failed to store token: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"Failed to save token: {str(e)}")
 
-#     # ── Step 4: Redirect back to monday.com
-#     return {'url': back_to_url}
+#     # ── Redirect back to monday.com
+#     return RedirectResponse(url=back_to_url)  # ensure absolute URL
 
-
-# # ─────────────────────────────────────────
-# # POST /api/auth/verify
-# # Called on every app load
-# # ─────────────────────────────────────────
-# @router.post("/verify", response_model=VerifyResponse)
-# async def verify_auth(payload: VerifyRequest, db: Client = Depends(get_db)):
-#     """
-#     Every app load calls this.
-#     Verifies session token + checks if OAuth done.
-#     """
-
-#     # ── Step 1: Verify session token (CLIENT SECRET)
-#     decoded = await verify_monday_token(payload.sessionToken)
-#     if not decoded:
-#         raise HTTPException(status_code=401, detail="Invalid or expired session token")
-
-#     # ── Step 2: Cross-check claims
-#     dat = decoded.get("dat", {})
-
-#     if str(dat.get("account_id", "")) != str(payload.accountId):
-#         raise HTTPException(status_code=401, detail="Token account mismatch")
-
-#     if str(dat.get("user_id", "")) != str(payload.userId):
-#         raise HTTPException(status_code=401, detail="Token user mismatch")
-
-#     # ── Step 3: Check if workspace has real access token
-#     try:
-#         ws_result = db.table("workspaces") \
-#             .select("id, access_token") \
-#             .eq("monday_workspace_id", payload.workspaceId) \
-#             .execute()
-#         workspace = ws_result.data[0] if ws_result.data else None
-#     except Exception:
-#         workspace = None
-
-#     has_oauth = (
-#         workspace is not None and
-#         workspace.get("access_token") is not None and
-#         workspace.get("access_token") != "test-token"
-#     )
-
-#     return VerifyResponse(
-#         success        = True,
-#         message        = "Token verified",
-#         has_oauth      = has_oauth,
-#         workspace_uuid = workspace["id"] if workspace else None,
-#         is_admin       = dat.get("is_admin", False),
-#     )
 
 
 # # ─────────────────────────────────────────

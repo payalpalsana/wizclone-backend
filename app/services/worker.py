@@ -32,7 +32,7 @@ from datetime import datetime, timezone, timedelta
 
 from app.core.database   import db as supabase_db
 from app.core.config     import settings
-from app.services.monday_service import create_subitem
+from app.services.monday_services import create_subitem
 
 MONDAY_API_URL = settings.monday_api_url
 
@@ -229,7 +229,19 @@ async def process_job(job: dict):
 
         if not templates:
             print(f"[Worker] No templates found — NO_MATCH")
-            await _update_event(automation_event_id, "NO_MATCH", 0, 0, None, None, 0)
+            # await _update_event(automation_event_id, "NO_MATCH", 0, 0, None, None, 0)
+            await _update_event(
+                event_id      = automation_event_id,
+                status        = "NO_MATCH",
+                copied        = 0,
+                failed        = 0,
+                template_id   = None,
+                template_name = None,
+                confidence    = 0,
+                match_method  = None,
+                ai_fallback   = True,
+                processing_ms = _elapsed_ms(start_time),
+            )
             _update_usage(workspace_uuid, 0, 0, False, True)
             await _complete_job(job_id)
             return

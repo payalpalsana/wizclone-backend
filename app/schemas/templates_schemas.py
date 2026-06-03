@@ -17,15 +17,6 @@ class SubitemCreate(BaseModel):
     sort_order: Optional[int] = None
 
 
-class SubitemResponse(BaseModel):
-    """
-    Used when returning subitem data to frontend.
-    """
-    id:         str
-    name:       str
-    sort_order: int
-
-
 class SubitemUpdate(BaseModel):
     """
     id present  → update existing subitem
@@ -37,6 +28,9 @@ class SubitemUpdate(BaseModel):
 
 
 class SubitemResponse(BaseModel):
+    """
+    Used when returning subitem data to frontend.
+    """
     id:         str
     name:       str
     sort_order: int

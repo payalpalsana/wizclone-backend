@@ -1,3 +1,5 @@
+# app/services/auth_service.py
+
 import jwt
 from supabase import Client
 from app.core.database import get_db
@@ -31,7 +33,7 @@ def _verify_session_token(token: str) -> dict | None:
     except jwt.ExpiredSignatureError:
         return None   # expired
     except jwt.InvalidTokenError:
-        return None   # tampered
+        return None    # invalid token 
 
 # ─────────────────────────────────────────
 # HELPER: Verify authorization token
@@ -86,7 +88,7 @@ def _init_user_and_settings(
                 "role":           "ADMIN" if is_admin else "MEMBER",
                 "is_admin":       is_admin,
             },
-            on_conflict="workspace_id,monday_user_id",
+            on_conflict="workspace_id, monday_user_id",
         ).execute()
     except Exception:
         pass  # non-critical

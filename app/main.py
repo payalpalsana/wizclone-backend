@@ -9,19 +9,21 @@
 #   python -m app.services.worker
 # ─────────────────────────────────────────────────────────────
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
-# Shared DB instance — available via app.state for any middleware
-# or lifespan code that can't use Depends()
+# Shared DB instance — available via app.state for any middleware or lifespan code that can't use Depends()
 from app.core.database import db
 
-# Route modules
+from app.core.security import verify_session_token
 from app.routes.auth      import router as auth_router
 from app.routes.settings  import router as settings_router
 from app.routes.templates import router as templates_router
 from app.routes.webhook   import router as webhook_router
 from app.routes.boards    import router as boards_router
+from app.routes.activity_log import router as activity_log_router
 
 # Create FastAPI app instance
 app = FastAPI(
@@ -42,25 +44,75 @@ app.add_middleware(
     allow_headers     = ["*"],
 )
 
+# ─────────────────────────────────────────
+# Session Token Middleware
+# Verifies token from Authorization header for all protected routes
+# ─────────────────────────────────────────
+
+# These paths do NOT need session token
+SKIP_PATHS = [
+    "/api/auth/authorization",
+    "/api/auth/callback",
+    "/api/auth/verify",
+    "/api/auth/oauth2/authorized",
+    "/webhook",
+    "/docs",
+    "/openapi.json",
+    "/health",
+    "/",
+]
+
+
+class SessionTokenMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+
+        # ── Skip unprotected paths
+        path = request.url.path
+        for skip in SKIP_PATHS:
+            if path.startswith(skip):
+                return await call_next(request)
+
+        # ── Extract token from Authorization header
+        # Frontend must send: Authorization: Bearer <sessionToken>
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Missing Authorization header"}
+            )
+
+        token = auth_header.replace("Bearer ", "").strip()
+
+        # ── Verify session token
+        decoded = verify_session_token(token)
+        if not decoded:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or expired session token"}
+            )
+
+        # ── Attach decoded token to request state
+        # Routes can access it via: request.state.token_data
+        request.state.token_data = decoded.get("dat", {})
+
+        return await call_next(request)
+
+
+app.add_middleware(SessionTokenMiddleware)
+
+
 # ── Attach shared DB to app state ──
 # Accessible anywhere via request.app.state.db
 # This is the SAME instance as `from app.core.database import db`
-# — not a duplicate client.
 app.state.db = db
 
 # ── Register routes ──
-app.include_router(auth_router)       # GET  /api/auth/authorize
-                                      # GET  /api/auth/callback
-                                      # POST /api/auth/init
-app.include_router(settings_router)   # GET  /api/settings/{workspaceId}
-                                      # POST /api/settings/{workspaceId}
-app.include_router(templates_router)  # GET  /api/templates/{workspaceId}
-                                      # POST /api/templates/{workspaceId}
-                                      # PUT  /api/templates/{workspaceId}/{templateId}
-                                      # DELETE /api/templates/{workspaceId}/{templateId}
-app.include_router(webhook_router)    # POST /webhook/monday
-
+app.include_router(auth_router)
+app.include_router(settings_router)
+app.include_router(templates_router)
+app.include_router(webhook_router)
 app.include_router(boards_router)
+app.include_router(activity_log_router) 
 
 
 # ── Health check ──
