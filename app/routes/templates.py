@@ -11,15 +11,13 @@
 # in sort_order sequence. Always preserve it.
 # ─────────────────────────────────────────────────────────────
 
-from fastapi import APIRouter, HTTPException, Depends
-
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from supabase import Client
 
 from app.core.database import get_db
-from app.services.settings_services import get_workspace_uuid, get_subitems_for_template
+from app.services.settings_services import get_workspace_uuid_for_request, get_subitems_for_template
 from app.schemas.templates_schemas import (
     TemplateCreateRequest, TemplateUpdateRequest,
     TemplateResponse,      TemplatesListResponse,
@@ -34,6 +32,7 @@ router = APIRouter(prefix="/api", tags=["Templates"])
 # ─────────────────────────────────────────
 @router.post("/templates/{workspaceId}", response_model=TemplateResponse)
 async def create_template(
+    request:     Request,
     workspaceId: str,
     body:        TemplateCreateRequest,
     db:          Client = Depends(get_db),
@@ -45,7 +44,7 @@ async def create_template(
     → If frontend sends sort_order → use it
     → If not sent → auto-assign 0, 1, 2 ... based on list position
     """
-    workspace_uuid = get_workspace_uuid(workspaceId, db)
+    workspace_uuid = get_workspace_uuid_for_request(request, workspaceId, db)
 
     # ── Insert template row ──
     try:
@@ -94,12 +93,12 @@ async def create_template(
 # GET /api/templates/{workspaceId}
 # ─────────────────────────────────────────
 @router.get("/templates/{workspaceId}", response_model=TemplatesListResponse)
-async def list_templates(workspaceId: str, db: Client = Depends(get_db)):
+async def list_templates(request: Request, workspaceId: str, db: Client = Depends(get_db)):
     """
     Return all active templates with their subitems (ordered by sort_order).
     Uses a single subitems query for all templates to avoid N+1 queries.
     """
-    workspace_uuid = get_workspace_uuid(workspaceId, db)
+    workspace_uuid = get_workspace_uuid_for_request(request, workspaceId, db)
 
     # ── Fetch all active templates ──
     try:
@@ -162,6 +161,7 @@ async def list_templates(workspaceId: str, db: Client = Depends(get_db)):
 # ─────────────────────────────────────────
 @router.put("/templates/{workspaceId}/{templateId}", response_model=TemplateResponse)
 async def update_template(
+    request:     Request,
     workspaceId: str,
     templateId:  str,
     body:        TemplateUpdateRequest,
@@ -175,7 +175,7 @@ async def update_template(
     → Subitem WITHOUT id → INSERT as new
     → Subitem in DB but NOT in request → soft-delete (set deleted_at)
     """
-    workspace_uuid = get_workspace_uuid(workspaceId, db)
+    workspace_uuid = get_workspace_uuid_for_request(request, workspaceId, db)
 
     # ── Verify template exists and belongs to this workspace ──
     try:
@@ -289,6 +289,7 @@ async def update_template(
 # ─────────────────────────────────────────
 @router.delete("/templates/{workspaceId}/{templateId}")
 async def delete_template(
+    request:     Request,
     workspaceId: str,
     templateId:  str,
     db:          Client = Depends(get_db),
@@ -298,7 +299,7 @@ async def delete_template(
     Data is kept in DB for audit / history.
     is_deleted=true, deleted_at=now on both tables.
     """
-    workspace_uuid = get_workspace_uuid(workspaceId, db)
+    workspace_uuid = get_workspace_uuid_for_request(request, workspaceId, db)
     now            = datetime.now(timezone.utc).isoformat()
 
     # ── Verify template exists and belongs to this workspace ──

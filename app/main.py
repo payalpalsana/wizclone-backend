@@ -64,6 +64,10 @@ SKIP_PATHS = [
 class SessionTokenMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
 
+        # ── Always pass CORS preflight requests through
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         # ── Skip unprotected paths
         path = request.url.path
         print(f"MIDDLEWARE HIT: {path}")

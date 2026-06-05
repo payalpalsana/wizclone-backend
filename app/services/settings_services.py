@@ -14,22 +14,36 @@ MONDAY_API_URL = settings.monday_api_url
 def get_workspace_by_monday_id(monday_workspace_id: str, db: Client) -> dict:
     """
     Resolve monday_workspace_id → full workspace row.
+    Falls back to monday_account_id if workspace_id lookup misses
+    (happens when OAuth callback stored account_id before workspace_id was known).
     Returns: id, access_token
     Raises HTTP 404 if not found.
     """
+    # Try monday_workspace_id first
     try:
         result = db.table("workspaces") \
-            .select("id, access_token") \
+            .select("id, access_token, monday_account_id") \
             .eq("monday_workspace_id", str(monday_workspace_id)) \
             .single() \
             .execute()
+        if result.data:
+            return result.data
     except Exception:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+        pass
 
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    # Fallback: treat the value as monday_account_id
+    try:
+        result = db.table("workspaces") \
+            .select("id, access_token, monday_account_id") \
+            .eq("monday_account_id", str(monday_workspace_id)) \
+            .single() \
+            .execute()
+        if result.data:
+            return result.data
+    except Exception:
+        pass
 
-    return result.data
+    raise HTTPException(status_code=404, detail="Workspace not found")
 
 
 def get_workspace_uuid(monday_workspace_id: str, db: Client) -> str:
@@ -60,7 +74,7 @@ async def fetch_monday_boards(access_token: str, workspace_id: int) -> list[dict
         limit: 100,
         order_by: created_at,
         workspace_ids: $workspaceIds,
-        board_kind: $boardKind
+        board_kind: public
       ) {
         id
         name
@@ -121,7 +135,6 @@ async def fetch_monday_boards(access_token: str, workspace_id: int) -> list[dict
                 "query":     query,
                 "variables": {
                     "workspaceIds": [str(workspace_id)],
-                    "boardKind":    "public"
                 },
             },
             headers={
@@ -137,6 +150,8 @@ async def fetch_monday_boards(access_token: str, workspace_id: int) -> list[dict
         raise Exception(f"monday.com GraphQL error: {data['errors']}")
 
     return data.get("data", {}).get("boards", [])
+
+
 
 
 # ─────────────────────────────────────────
@@ -179,6 +194,31 @@ def get_workspace_settings(workspace_uuid: str, db: Client) -> dict | None:
         return result.data
     except Exception:
         return None
+
+
+def get_workspace_uuid_for_request(request, workspace_id_fallback: str, db: Client) -> str:
+    """
+    Resolve workspace UUID from session token account_id (preferred)
+    or monday_workspace_id path param (fallback).
+    Consistent with the pattern used in settings and auth routes.
+    """
+    from fastapi import HTTPException
+    token_data = getattr(request.state, "token_data", {})
+    account_id = token_data.get("account_id")
+
+    if account_id:
+        try:
+            result = db.table("workspaces") \
+                .select("id") \
+                .eq("monday_account_id", int(account_id)) \
+                .single() \
+                .execute()
+            if result.data:
+                return result.data["id"]
+        except Exception:
+            pass
+
+    return get_workspace_uuid(workspace_id_fallback, db)
 
 
 def get_workspace_sensitivity(workspace_uuid: str, db: Client) -> str:

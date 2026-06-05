@@ -50,6 +50,7 @@ router = APIRouter(prefix="/api/settings", tags=["Settings"])
 # ─────────────────────────────────────────
 @router.post("/load", response_model=SettingsResponse)
 async def load_settings(
+    request: Request,
     body: SettingsLoadRequest,
     db:   Client = Depends(get_db),
 ):
@@ -65,7 +66,34 @@ async def load_settings(
     Returns final board list + sensitivity + automation toggle.
     """
 
-    workspace      = get_workspace_by_monday_id(str(body.workspaceId), db)
+    # Prefer account_id from decoded session token (stamped by middleware)
+    # Fall back to workspaceId from body for backwards compat
+    token_data = getattr(request.state, "token_data", {})
+    account_id = token_data.get("account_id")
+
+    if account_id:
+        try:
+            ws_result = db.table("workspaces") \
+                .select("id, access_token") \
+                .eq("monday_account_id", int(account_id)) \
+                .single() \
+                .execute()
+            workspace = ws_result.data
+        except Exception:
+            workspace = None
+        if not workspace:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+        # Stamp monday_workspace_id if still missing
+        if not ws_result.data.get("monday_workspace_id"):
+            try:
+                db.table("workspaces").update({
+                    "monday_workspace_id": int(body.workspaceId)
+                }).eq("id", workspace["id"]).execute()
+            except Exception:
+                pass
+    else:
+        workspace = get_workspace_by_monday_id(str(body.workspaceId), db)
+
     workspace_uuid = workspace["id"]
     access_token   = workspace["access_token"]
 
@@ -209,7 +237,24 @@ async def save_settings(
     Part 3 — individual board toggles   → webhook create/delete + DB update
     """
 
-    workspace      = get_workspace_by_monday_id(str(body.workspaceId), db)
+    token_data = getattr(request.state, "token_data", {})
+    account_id = token_data.get("account_id")
+
+    if account_id:
+        try:
+            ws_result = db.table("workspaces") \
+                .select("id, access_token") \
+                .eq("monday_account_id", int(account_id)) \
+                .single() \
+                .execute()
+            workspace = ws_result.data
+        except Exception:
+            workspace = None
+        if not workspace:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+    else:
+        workspace = get_workspace_by_monday_id(str(body.workspaceId), db)
+
     workspace_uuid = workspace["id"]
     access_token   = workspace["access_token"]
 

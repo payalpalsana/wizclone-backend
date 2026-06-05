@@ -35,13 +35,11 @@
 #               return has_oauth: true/false
 # ─────────────────────────────────────────────────────────────
 
-import token
-
 import jwt
 import httpx
 import urllib.parse
 from fastapi           import APIRouter, HTTPException, Query, Depends, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 
 from supabase import Client
 from app.core.database import get_db
@@ -267,8 +265,24 @@ async def oauth_callback(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB save failed: {str(e)}")
 
-    # ── Step 4: Redirect (fallback)
-    return RedirectResponse(url="https://monday.com")
+    # ── Step 4: Return page that closes the OAuth tab automatically
+    # The app panel's polling loop will detect has_oauth=true on the next tick.
+    return HTMLResponse(content="""
+<!DOCTYPE html>
+<html>
+<head><title>WizClone - Connected</title></head>
+<body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5;">
+  <div style="text-align:center;padding:40px;">
+    <h2 style="color:#333;">&#10003; Connected successfully</h2>
+    <p style="color:#666;">You can close this tab and return to monday.com.</p>
+    <script>
+      // Try to close this tab; if blocked, just show the message above.
+      try { window.close(); } catch(e) {}
+    </script>
+  </div>
+</body>
+</html>
+""", status_code=200)
 
 
 
@@ -345,7 +359,7 @@ async def verify_auth(payload: VerifyRequest, request: Request, db: Client = Dep
                     "is_active":           True,
                     "is_paused":           False,
                 },
-                on_conflict="monday_workspace_id",
+                on_conflict="monday_account_id",
             ).execute()
             workspace = ws_result.data[0]
             

@@ -18,14 +18,14 @@
 #       error_details
 # ─────────────────────────────────────────────────────────────
 
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from supabase import Client
 from app.core.database import get_db
 from typing import Optional, List
 from app.services.activity_log_services import (
     _time_ago, _duration_str, _get_copied_subitem_names,
 )
-from app.services.settings_services import get_workspace_uuid
+from app.services.settings_services import get_workspace_uuid_for_request
 from app.schemas.activity_log_schemas import ActivityLogResponse, ActivityLogItem
 
 router = APIRouter(prefix="/api", tags=["Activity Log"])
@@ -35,6 +35,7 @@ router = APIRouter(prefix="/api", tags=["Activity Log"])
 # ═══════════════════════════════════════════════════════════
 @router.get("/activity-log/{workspaceId}", response_model=ActivityLogResponse)
 async def get_activity_log(
+    request: Request,
     workspaceId: str,
     # ── Filter tab ──
     # all | success | no_match | failed
@@ -71,7 +72,7 @@ async def get_activity_log(
       - ai_fallback_used
     """
 
-    workspace_uuid = get_workspace_uuid(workspaceId, db)
+    workspace_uuid = get_workspace_uuid_for_request(request, workspaceId, db)
     offset         = (page - 1) * limit
 
     # ── Build status filter ──
