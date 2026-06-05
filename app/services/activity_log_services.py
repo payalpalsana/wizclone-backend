@@ -1,3 +1,5 @@
+# app/services/activity_log_services.py
+
 from datetime import datetime, timezone
 from supabase import Client
 from app.core.database import get_db

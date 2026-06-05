@@ -22,7 +22,6 @@ from app.routes.auth      import router as auth_router
 from app.routes.settings  import router as settings_router
 from app.routes.templates import router as templates_router
 from app.routes.webhook   import router as webhook_router
-from app.routes.boards    import router as boards_router
 from app.routes.activity_log import router as activity_log_router
 
 # Create FastAPI app instance
@@ -59,7 +58,6 @@ SKIP_PATHS = [
     "/docs",
     "/openapi.json",
     "/health",
-    "/",
 ]
 
 
@@ -68,6 +66,7 @@ class SessionTokenMiddleware(BaseHTTPMiddleware):
 
         # ── Skip unprotected paths
         path = request.url.path
+        print(f"MIDDLEWARE HIT: {path}")
         for skip in SKIP_PATHS:
             if path.startswith(skip):
                 return await call_next(request)
@@ -111,7 +110,6 @@ app.include_router(auth_router)
 app.include_router(settings_router)
 app.include_router(templates_router)
 app.include_router(webhook_router)
-app.include_router(boards_router)
 app.include_router(activity_log_router) 
 
 

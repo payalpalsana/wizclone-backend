@@ -277,54 +277,50 @@ async def oauth_callback(
 # Frontend calls this on every app load
 # ═══════════════════════════════════════════════════════════
 @router.post("/verify", response_model=VerifyResponse)
-async def verify_auth(payload: VerifyRequest, db: Client = Depends(get_db)):
+async def verify_auth(payload: VerifyRequest, request: Request, db: Client = Depends(get_db)):
     """
     Called on every app load by frontend.
 
     Flow:
-    1. Decode session token with CLIENT SECRET
-    2. Cross-check accountId + userId
-    3. Check if workspace has real access_token in DB
-    4. If first load (no workspace row) → create workspace row
-    5. Save user + default settings
-    6. Return has_oauth: true/false
-
-    Frontend:
-    - has_oauth = false → show "Connect Workspace" button
-    - has_oauth = true  → load app normally
+    1. Read session token from Authorization header
+    2. Decode token using CLIENT SECRET
+    3. Validate account_id + user_id
+    4. Check/create workspace in DB
+    5. Initialize user + settings
+    6. Return has_oauth status
     """
     # ── Step 1: Decode session token (CLIENT SECRET)
-    decoded = _verify_session_token(payload.sessionToken)
+    auth_header = request.headers.get("Authorization", "")
+
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    
+    token   = auth_header.replace("Bearer ", "").strip()
+
+    decoded = _verify_session_token(token)
+    print("DECODED:", decoded)
+
     if not decoded:
         raise HTTPException(status_code=401, detail="Invalid or expired session token")
 
     # ── Step 2: Cross-check claims
     dat = decoded.get("dat", {})
 
-    if str(dat.get("account_id", "")) != str(payload.accountId):
-        raise HTTPException(status_code=401, detail="Token account mismatch")
-
-    if str(dat.get("user_id", "")) != str(payload.userId):
-        raise HTTPException(status_code=401, detail="Token user mismatch")
-
+    account_id = dat.get("account_id")
+    user_id    = dat.get("user_id")
     is_admin = dat.get("is_admin", False)
 
-    # ── Step 3: Check if workspace exists in DB
+    if not account_id or not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token — missing account or user")
+
+    # ── Step 3: Check workspace exists in DB
     try:
         ws_result = db.table("workspaces") \
             .select("id, access_token, monday_workspace_id") \
-            .eq("monday_workspace_id", payload.workspaceId) \
+            .eq("monday_account_id", account_id) \
             .execute()
         
         workspace = ws_result.data[0] if ws_result.data else None
-
-        # Fallback: OAuth callback saved by account_id but workspace_id was NULL
-        if not workspace:
-            ws_result2 = db.table("workspaces") \
-                .select("id, access_token, monday_workspace_id") \
-                .eq("monday_account_id", payload.accountId) \
-                .execute()
-            workspace = ws_result2.data[0] if ws_result2.data else None
 
         # If found via account_id fallback, stamp the workspace_id now
         if workspace and not workspace.get("monday_workspace_id"):
@@ -340,7 +336,7 @@ async def verify_auth(payload: VerifyRequest, db: Client = Depends(get_db)):
         try:
             ws_result = db.table("workspaces").upsert(
                 {
-                    "monday_account_id":   int(payload.accountId),
+                    "monday_account_id":   int(account_id),
                     "monday_workspace_id": int(payload.workspaceId),
                     "workspace_name":      f"Workspace {payload.workspaceId}",
                     "access_token":        "",     # empty = no OAuth yet, avoids NOT NULL issue
@@ -352,6 +348,7 @@ async def verify_auth(payload: VerifyRequest, db: Client = Depends(get_db)):
                 on_conflict="monday_workspace_id",
             ).execute()
             workspace = ws_result.data[0]
+            
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to create workspace: {str(e)}")
 
@@ -361,13 +358,13 @@ async def verify_auth(payload: VerifyRequest, db: Client = Depends(get_db)):
     _init_user_and_settings(
         db             = db,
         workspace_uuid = workspace_uuid,
-        user_id        = int(payload.userId),
+        user_id        = int(user_id),
         is_admin       = is_admin,
     )
 
     # ── Step 6: Check has_oauth
-    token = workspace.get("access_token") or ""
-    has_oauth = bool(token.strip()) and token not in ["", "test-token"]
+    access_token = workspace.get("access_token") or ""
+    has_oauth = bool(access_token.strip()) and access_token not in ["", "test-token"]
 
     return VerifyResponse(
         success        = True,
@@ -375,7 +372,7 @@ async def verify_auth(payload: VerifyRequest, db: Client = Depends(get_db)):
         has_oauth      = has_oauth,
         workspace_uuid = workspace_uuid,
         workspace_id   = payload.workspaceId,
-        user_id        = int(payload.userId),
+        user_id        = int(user_id),
         is_admin       = is_admin,
     )
 

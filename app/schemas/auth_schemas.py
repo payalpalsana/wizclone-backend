@@ -14,14 +14,8 @@ class VerifyRequest(BaseModel):
     Frontend sends this on every app load.
 
     How frontend gets these values:
-        sessionToken → monday.get("sessionToken").then(res => res.data)
-        accountId    → from monday context or decoded sessionToken
-        userId       → from monday context or decoded sessionToken
         workspaceId  → from monday context
     """
-    sessionToken: str
-    accountId:    int
-    userId:       int
     workspaceId:  int
 
 
