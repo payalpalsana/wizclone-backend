@@ -12,11 +12,14 @@ from typing   import Optional
 class VerifyRequest(BaseModel):
     """
     Frontend sends this on every app load.
-
-    How frontend gets these values:
-        workspaceId  → from monday context
+    All fields optional — backend uses whatever is available.
+    Primary identity: session token (Authorization header)
+    Fallback identity: accountId from monday context
     """
-    workspaceId:  int
+    workspaceId:  Optional[int] = None
+    accountId:    Optional[int] = None
+    userId:       Optional[int] = None
+    sessionToken: Optional[str] = None  # ignored — token is read from Authorization header
 
 
 class VerifyResponse(BaseModel):

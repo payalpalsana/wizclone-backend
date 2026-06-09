@@ -295,90 +295,107 @@ async def verify_auth(payload: VerifyRequest, request: Request, db: Client = Dep
     """
     Called on every app load by frontend.
 
+    Session token is preferred but not required — if missing or expired,
+    accountId from the request body is used as fallback so that a
+    token refresh failure never shows the Onboard screen to an already-
+    connected workspace.
+
     Flow:
-    1. Read session token from Authorization header
-    2. Decode token using CLIENT SECRET
-    3. Validate account_id + user_id
-    4. Check/create workspace in DB
-    5. Initialize user + settings
-    6. Return has_oauth status
+    1. Try to decode session token → get account_id + user_id
+    2. Fall back to payload.accountId if token unavailable
+    3. Look up workspace by monday_account_id (SELECT only — never overwrites)
+    4. Create new workspace row only if genuinely not found (INSERT, not UPSERT)
+    5. Init user + default settings
+    6. Return has_oauth based on whether access_token is stored
     """
-    # ── Step 1: Decode session token (CLIENT SECRET)
+
+    # ── Step 1: Try session token (non-fatal if missing / expired)
+    account_id = None
+    user_id    = None
+    is_admin   = False
+
     auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token   = auth_header.replace("Bearer ", "").strip()
+        decoded = _verify_session_token(token)
+        if decoded:
+            dat        = decoded.get("dat", {})
+            account_id = dat.get("account_id")
+            user_id    = dat.get("user_id")
+            is_admin   = dat.get("is_admin", False)
 
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-    
-    token   = auth_header.replace("Bearer ", "").strip()
+    # ── Step 2: Fallback to body params when token unavailable
+    if not account_id and payload.accountId:
+        account_id = payload.accountId
+    if not user_id and payload.userId:
+        user_id = payload.userId
 
-    decoded = _verify_session_token(token)
-    print("DECODED:", decoded)
+    if not account_id:
+        raise HTTPException(status_code=401, detail="Cannot identify account — session token missing and no accountId provided")
 
-    if not decoded:
-        raise HTTPException(status_code=401, detail="Invalid or expired session token")
-
-    # ── Step 2: Cross-check claims
-    dat = decoded.get("dat", {})
-
-    account_id = dat.get("account_id")
-    user_id    = dat.get("user_id")
-    is_admin = dat.get("is_admin", False)
-
-    if not account_id or not user_id:
-        raise HTTPException(status_code=401, detail="Invalid token — missing account or user")
-
-    # ── Step 3: Check workspace exists in DB
+    # ── Step 3: Look up workspace (safe SELECT — never overwrites access_token)
+    workspace = None
     try:
         ws_result = db.table("workspaces") \
             .select("id, access_token, monday_workspace_id") \
-            .eq("monday_account_id", account_id) \
+            .eq("monday_account_id", int(account_id)) \
             .execute()
-        
         workspace = ws_result.data[0] if ws_result.data else None
-
-        # If found via account_id fallback, stamp the workspace_id now
-        if workspace and not workspace.get("monday_workspace_id"):
-            db.table("workspaces").update({
-                "monday_workspace_id": int(payload.workspaceId)
-            }).eq("id", workspace["id"]).execute()
-
     except Exception:
         workspace = None
 
-    # ── Step 4: If workspace doesn't exist → create placeholder row
+    # Stamp monday_workspace_id if it was NULL
+    if workspace and not workspace.get("monday_workspace_id") and payload.workspaceId:
+        try:
+            db.table("workspaces").update({
+                "monday_workspace_id": int(payload.workspaceId)
+            }).eq("id", workspace["id"]).execute()
+        except Exception:
+            pass
+
+    # ── Step 4: Create new workspace only when genuinely absent
+    # Use INSERT (not UPSERT) so we never overwrite an existing access_token
     if workspace is None:
         try:
-            ws_result = db.table("workspaces").upsert(
-                {
-                    "monday_account_id":   int(account_id),
-                    "monday_workspace_id": int(payload.workspaceId),
-                    "workspace_name":      f"Workspace {payload.workspaceId}",
-                    "access_token":        "",     # empty = no OAuth yet, avoids NOT NULL issue
-                    "plan_tier":           "FREE",
-                    "status":              "ACTIVE",
-                    "is_active":           True,
-                    "is_paused":           False,
-                },
-                on_conflict="monday_account_id",
-            ).execute()
+            ws_result = db.table("workspaces").insert({
+                "monday_account_id":   int(account_id),
+                "monday_workspace_id": int(payload.workspaceId) if payload.workspaceId else None,
+                "workspace_name":      f"Workspace {account_id}",
+                "access_token":        "",
+                "plan_tier":           "FREE",
+                "status":              "ACTIVE",
+                "is_active":           True,
+                "is_paused":           False,
+            }).execute()
             workspace = ws_result.data[0]
-            
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to create workspace: {str(e)}")
+        except Exception:
+            # Unique constraint hit (race condition) — row was just created, fetch it
+            try:
+                ws_result = db.table("workspaces") \
+                    .select("id, access_token, monday_workspace_id") \
+                    .eq("monday_account_id", int(account_id)) \
+                    .execute()
+                workspace = ws_result.data[0] if ws_result.data else None
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to resolve workspace: {str(e)}")
+
+    if not workspace:
+        raise HTTPException(status_code=500, detail="Workspace could not be created or found")
 
     workspace_uuid = workspace["id"]
 
-    # ── Step 5: Always save user + default settings
-    _init_user_and_settings(
-        db             = db,
-        workspace_uuid = workspace_uuid,
-        user_id        = int(user_id),
-        is_admin       = is_admin,
-    )
+    # ── Step 5: Init user + default settings (non-blocking)
+    if user_id:
+        _init_user_and_settings(
+            db             = db,
+            workspace_uuid = workspace_uuid,
+            user_id        = int(user_id),
+            is_admin       = is_admin,
+        )
 
-    # ── Step 6: Check has_oauth
+    # ── Step 6: Derive has_oauth from stored access_token
     access_token = workspace.get("access_token") or ""
-    has_oauth = bool(access_token.strip()) and access_token not in ["", "test-token"]
+    has_oauth    = bool(access_token.strip()) and access_token not in ["", "test-token"]
 
     return VerifyResponse(
         success        = True,
@@ -386,7 +403,7 @@ async def verify_auth(payload: VerifyRequest, request: Request, db: Client = Dep
         has_oauth      = has_oauth,
         workspace_uuid = workspace_uuid,
         workspace_id   = payload.workspaceId,
-        user_id        = int(user_id),
+        user_id        = int(user_id) if user_id else None,
         is_admin       = is_admin,
     )
 
