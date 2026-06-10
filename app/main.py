@@ -9,33 +9,36 @@
 #   python -m app.services.worker
 # ─────────────────────────────────────────────────────────────
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
-# Shared DB instance — available via app.state for any middleware or lifespan code that can't use Depends()
-from app.core.database import db
-
-from app.core.security import verify_session_token
-from app.routes.auth      import router as auth_router
-from app.routes.settings  import router as settings_router
-from app.routes.templates import router as templates_router
-from app.routes.webhook   import router as webhook_router
+from app.core.database  import db
+from app.core.security  import verify_session_token
+from app.routes.auth        import router as auth_router
+from app.routes.settings    import router as settings_router
+from app.routes.templates   import router as templates_router
+from app.routes.webhook     import router as webhook_router
 from app.routes.activity_log import router as activity_log_router
 
-# Create FastAPI app instance
+
+# ─────────────────────────────────────────
+# App instance
+# ─────────────────────────────────────────
 app = FastAPI(
-    title       = "WizClone API",
-    version     = "1.0.0",
-    description = "Smart Template & Subitem Automation for monday.com",
-    docs_url    = "/docs",
+    title            = "WizClone API",
+    version          = "1.0.0",
+    description      = "Smart Template & Subitem Automation for monday.com",
+    docs_url         = "/docs",
     redirect_slashes = False,
 )
 
-# ── CORS ──
-# Allow monday.com app panel (iframe) to call the backend.
-# In production, restrict allow_origins to your monday app domain.
+
+# ─────────────────────────────────────────
+# CORS
+# ─────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins     = ["*"],
@@ -44,13 +47,13 @@ app.add_middleware(
     allow_headers     = ["*"],
 )
 
-# ─────────────────────────────────────────
-# Session Token Middleware
-# Verifies token from Authorization header for all protected routes
-# ─────────────────────────────────────────
 
-# These paths do NOT need session token
-SKIP_PATHS = [
+# ─────────────────────────────────────────
+# Paths that do NOT require session token
+# ─────────────────────────────────────────
+# These paths skip the middleware token check AND
+# are marked as public in Swagger (no lock icon).
+PUBLIC_PATHS = [
     "/api/auth/authorization",
     "/api/auth/callback",
     "/api/auth/verify",
@@ -59,44 +62,48 @@ SKIP_PATHS = [
     "/docs",
     "/openapi.json",
     "/health",
+    "/",
+    "/routes-debug",
 ]
 
 
+# ─────────────────────────────────────────
+# Session Token Middleware
+# ─────────────────────────────────────────
 class SessionTokenMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
 
-        # ── Always pass CORS preflight requests through
+        # Always pass CORS preflight
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        # ── Skip unprotected paths
         path = request.url.path
         print(f"MIDDLEWARE HIT: {path}")
-        for skip in SKIP_PATHS:
+
+        # Skip public paths
+        for skip in PUBLIC_PATHS:
             if path.startswith(skip):
                 return await call_next(request)
 
-        # ── Extract token from Authorization header
-        # Frontend must send: Authorization: Bearer <sessionToken>
+        # Require Authorization header
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             return JSONResponse(
                 status_code=401,
-                content={"detail": "Missing Authorization header"}
+                content={"detail": "Missing Authorization header"},
             )
 
-        token = auth_header.replace("Bearer ", "").strip()
-
-        # ── Verify session token
+        token   = auth_header.replace("Bearer ", "").strip()
         decoded = verify_session_token(token)
+
         if not decoded:
             return JSONResponse(
                 status_code=401,
-                content={"detail": "Invalid or expired session token"}
+                content={"detail": "Invalid or expired session token"},
             )
 
-        # ── Attach decoded token to request state
-        # Routes can access it via: request.state.token_data
+        # Attach decoded token to request state
+        # Access in routes via: request.state.token_data
         request.state.token_data = decoded.get("dat", {})
 
         return await call_next(request)
@@ -105,21 +112,105 @@ class SessionTokenMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SessionTokenMiddleware)
 
 
-# ── Attach shared DB to app state ──
-# Accessible anywhere via request.app.state.db
-# This is the SAME instance as `from app.core.database import db`
+# ─────────────────────────────────────────
+# DB on app state
+# ─────────────────────────────────────────
 app.state.db = db
 
-# ── Register routes ──
+
+# ─────────────────────────────────────────
+# Swagger — Bearer Auth only on protected routes
+#
+# Public routes (no lock icon in Swagger):
+#   GET  /
+#   GET  /health
+#   GET  /routes-debug
+#   GET  /api/auth/authorization
+#   GET  /api/auth/callback
+#   POST /api/auth/verify
+#   POST /api/auth/oauth2/authorized
+#   POST /webhook/monday/{workspace_id}
+#
+# Protected routes (lock icon — requires Bearer token):
+#   POST /api/settings/load
+#   POST /api/settings/save
+#   GET  /api/templates/{workspaceId}
+#   POST /api/templates/{workspaceId}
+#   PUT  /api/templates/{workspaceId}/{templateId}
+#   DEL  /api/templates/{workspaceId}/{templateId}
+#   GET  /api/activity-log/{workspaceId}
+# ─────────────────────────────────────────
+
+# Route prefixes that are PUBLIC — no auth needed in Swagger
+SWAGGER_PUBLIC_PREFIXES = (
+    "/api/auth/",
+    "/webhook/",
+    "/health",
+    "/routes-debug",
+    "/",
+)
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        title       = "WizClone API",
+        version     = "1.0.0",
+        description = "Smart Template & Subitem Automation for monday.com",
+        routes      = app.routes,
+    )
+
+    # Define Bearer auth scheme
+    openapi_schema.setdefault("components", {})
+    openapi_schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type":        "http",
+            "scheme":      "bearer",
+            "bearerFormat": "JWT",
+            "description": "monday.com session token — get it from: monday.get('sessionToken')",
+        }
+    }
+
+    # Apply security per-route instead of globally
+    # Public routes → no security (no lock icon)
+    # Protected routes → BearerAuth (lock icon shown)
+    for path, path_item in openapi_schema.get("paths", {}).items():
+        is_public = any(path.startswith(prefix) for prefix in SWAGGER_PUBLIC_PREFIXES)
+
+        for method, operation in path_item.items():
+            if not isinstance(operation, dict):
+                continue
+
+            if is_public:
+                # Explicitly mark as no security — removes lock icon
+                operation["security"] = []
+            else:
+                # Require Bearer token — shows lock icon
+                operation["security"] = [{"BearerAuth": []}]
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
+
+
+# ─────────────────────────────────────────
+# Register routes
+# ─────────────────────────────────────────
 app.include_router(auth_router)
 app.include_router(settings_router)
 app.include_router(templates_router)
 app.include_router(webhook_router)
-app.include_router(activity_log_router) 
+app.include_router(activity_log_router)
 
 
-# ── Health check ──
-@app.get("/")
+# ─────────────────────────────────────────
+# Health check
+# ─────────────────────────────────────────
+@app.get("/", tags=["Health"])
 async def root():
     return {
         "app":     "WizClone",
@@ -129,19 +220,20 @@ async def root():
     }
 
 
-# ── DB availability check ──
-@app.get("/health")
+@app.get("/health", tags=["Health"])
 async def health():
-    """
-    Quick liveness probe.
-    Checks that the Supabase client can reach the DB.
-    """
+    """Liveness probe — checks Supabase connection."""
     try:
         app.state.db.table("workspaces").select("id").limit(1).execute()
         return {"status": "ok", "db": "connected"}
     except Exception as e:
         return {"status": "error", "db": str(e)}
 
-@app.get("/routes-debug")
+
+@app.get("/routes-debug", tags=["Health"])
 async def list_routes():
-    return [{"path": r.path, "methods": list(r.methods)} for r in app.routes]
+    """Lists all registered routes — for debugging only."""
+    return [
+        {"path": r.path, "methods": list(r.methods)}
+        for r in app.routes
+    ]
