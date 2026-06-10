@@ -2,21 +2,22 @@
 # ─────────────────────────────────────────────────────────────
 # Template CRUD APIs
 #
-# POST   /api/templates/{workspaceId}              → create
-# GET    /api/templates/{workspaceId}              → list all
-# PUT    /api/templates/{workspaceId}/{templateId} → update name + subitems
-# DELETE /api/templates/{workspaceId}/{templateId} → soft delete
+# POST   /api/templates/{workspaceId}                          → create
+# GET    /api/templates/{workspaceId}?page=1&limit=20&search=  → list (paginated + search)
+# PUT    /api/templates/{workspaceId}/{templateId}             → update name + subitems
+# DELETE /api/templates/{workspaceId}/{templateId}             → soft delete
 #
 # Subitem ORDER IS IMPORTANT — subitems are copied to monday.com
 # in sort_order sequence. Always preserve it.
 # ─────────────────────────────────────────────────────────────
 
 from datetime import datetime, timezone
+from typing   import Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi  import APIRouter, HTTPException, Depends, Request, Query
 from supabase import Client
 
-from app.core.database import get_db
+from app.core.database  import get_db
 from app.services.settings import get_workspace_uuid_for_request, get_subitems_for_template
 from app.schemas.templates import (
     TemplateCreateRequest, TemplateUpdateRequest,
@@ -93,32 +94,67 @@ async def create_template(
 # GET /api/templates/{workspaceId}
 # ─────────────────────────────────────────
 @router.get("/templates/{workspaceId}", response_model=TemplatesListResponse)
-async def list_templates(request: Request, workspaceId: str, db: Client = Depends(get_db)):
+async def list_templates(
+    request:     Request,
+    workspaceId: str,
+    # ── Pagination ──
+    page:    int           = Query(default=1,  ge=1,          description="Page number (1-based)"),
+    limit:   int           = Query(default=20, ge=1,  le=100, description="Items per page (max 100)"),
+    # ── Search ──
+    search:  Optional[str] = Query(default=None,              description="Search by template name"),
+    db:      Client        = Depends(get_db),
+):
     """
-    Return all active templates with their subitems (ordered by sort_order).
-    Uses a single subitems query for all templates to avoid N+1 queries.
+    Return paginated templates with their subitems.
+
+    Query params:
+        page   → page number, starts at 1 (default: 1)
+        limit  → items per page, max 100 (default: 20)
+        search → filter templates by name (case-insensitive partial match)
+
+    Examples:
+        GET /api/templates/13120926
+        GET /api/templates/13120926?page=2&limit=10
+        GET /api/templates/13120926?search=onboarding
+        GET /api/templates/13120926?search=client&page=1&limit=5
     """
     workspace_uuid = get_workspace_uuid_for_request(request, workspaceId, db)
+    offset         = (page - 1) * limit
 
-    # ── Fetch all active templates ──
+    # ── Build query with optional search filter ──
     try:
-        t_result = db.table("templates") \
-            .select("id, name, usage_count, created_at") \
+        query = db.table("templates") \
+            .select("id, name, usage_count, created_at", count="exact") \
             .eq("workspace_id", workspace_uuid) \
             .eq("is_deleted",   False) \
             .eq("is_active",    True) \
             .order("created_at", desc=False) \
-            .execute()
+            .range(offset, offset + limit - 1)
+
+        # Apply search filter if provided
+        # ilike = case-insensitive LIKE — matches partial names
+        # e.g. search="client" matches "New Client Onboarding", "Client Setup" etc.
+        if search and search.strip():
+            query = query.ilike("name", f"%{search.strip()}%")
+
+        result = query.execute()
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch templates: {str(e)}")
 
-    templates = t_result.data or []
+    templates   = result.data or []
+    total       = result.count or 0
+    total_pages = max(1, -(-total // limit))  # ceiling division
 
+    # ── Return empty response if no templates found ──
     if not templates:
         return TemplatesListResponse(
-            workspace_id=workspaceId, 
-            total=0, 
-            templates=[]
+            workspace_id = workspaceId,
+            total        = 0,
+            page         = page,
+            limit        = limit,
+            total_pages  = 1,
+            templates    = [],
         )
 
     # ── Fetch all subitems for all templates in ONE query (avoids N+1) ──
@@ -134,7 +170,7 @@ async def list_templates(request: Request, workspaceId: str, db: Client = Depend
     except Exception:
         s_result = None
 
-    # Group subitems by template_id
+    # ── Group subitems by template_id ──
     subitems_map: dict[str, list] = {t["id"]: [] for t in templates}
     for sub in (s_result.data or []):
         if sub["template_id"] in subitems_map:
@@ -142,7 +178,10 @@ async def list_templates(request: Request, workspaceId: str, db: Client = Depend
 
     return TemplatesListResponse(
         workspace_id = workspaceId,
-        total        = len(templates),
+        total        = total,
+        page         = page,
+        limit        = limit,
+        total_pages  = total_pages,
         templates    = [
             TemplateResponse(
                 id          = t["id"],
@@ -208,7 +247,7 @@ async def update_template(
     # ── Update subitems if provided ──
     if body.subitems is not None:
 
-        # IDs the frontend is keeping (existing subitems that were not removed)
+        # IDs the frontend is keeping
         sent_ids = {sub.id for sub in body.subitems if sub.id is not None}
 
         # IDs currently in DB
@@ -225,10 +264,9 @@ async def update_template(
             )
 
         current_ids   = {row["id"] for row in (current.data or [])}
+        ids_to_delete = current_ids - sent_ids
 
-        # IDs in DB but NOT in request → soft delete
-        ids_to_delete = current_ids - sent_ids   # in DB but not in request → soft delete
-
+        # Soft delete removed subitems
         if ids_to_delete:
             try:
                 db.table("template_subitems") \
@@ -241,12 +279,12 @@ async def update_template(
                     detail=f"Failed to delete removed subitems: {str(e)}",
                 )
 
-        # Process each subitem in the request (update existing, insert new)
+        # Update existing or insert new subitems
         for idx, sub in enumerate(body.subitems):
             sort_order = sub.sort_order if sub.sort_order is not None else idx
 
             if sub.id:
-                # Update existing
+                # Update existing subitem
                 try:
                     db.table("template_subitems") \
                         .update({"name": sub.name, "sort_order": sort_order}) \
@@ -258,7 +296,7 @@ async def update_template(
                         detail=f"Failed to update subitem {sub.id}: {str(e)}",
                     )
             else:
-                # Insert new
+                # Insert new subitem
                 try:
                     db.table("template_subitems") \
                         .insert({
@@ -296,8 +334,8 @@ async def delete_template(
 ):
     """
     Soft-delete a template and all its subitems.
-    Data is kept in DB for audit / history.
-    is_deleted=true, deleted_at=now on both tables.
+    Data is kept in DB for audit/history.
+    Sets is_deleted=true, deleted_at=now on both tables.
     """
     workspace_uuid = get_workspace_uuid_for_request(request, workspaceId, db)
     now            = datetime.now(timezone.utc).isoformat()
