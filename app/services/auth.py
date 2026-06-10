@@ -1,4 +1,4 @@
-# app/services/auth_service.py
+# app/services/auth.py
 
 import jwt
 from supabase import Client

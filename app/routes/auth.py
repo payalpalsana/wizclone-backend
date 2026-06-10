@@ -44,11 +44,11 @@ from fastapi.responses import RedirectResponse, HTMLResponse
 from supabase import Client
 from app.core.database import get_db
 from app.core.config   import settings
-from app.services.auth_services import (
+from app.services.auth import (
     _verify_session_token, _verify_authorization_token, _init_user_and_settings
 )
 
-from app.schemas.auth_schemas  import (
+from app.schemas.auth  import (
     VerifyRequest, VerifyResponse
 )
 

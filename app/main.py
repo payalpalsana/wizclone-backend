@@ -30,6 +30,7 @@ app = FastAPI(
     version     = "1.0.0",
     description = "Smart Template & Subitem Automation for monday.com",
     docs_url    = "/docs",
+    redirect_slashes = False,
 )
 
 # ── CORS ──
@@ -54,7 +55,7 @@ SKIP_PATHS = [
     "/api/auth/callback",
     "/api/auth/verify",
     "/api/auth/oauth2/authorized",
-    "/webhook",
+    "/webhook/monday/",
     "/docs",
     "/openapi.json",
     "/health",
@@ -140,3 +141,7 @@ async def health():
         return {"status": "ok", "db": "connected"}
     except Exception as e:
         return {"status": "error", "db": str(e)}
+
+@app.get("/routes-debug")
+async def list_routes():
+    return [{"path": r.path, "methods": list(r.methods)} for r in app.routes]

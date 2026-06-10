@@ -17,8 +17,8 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from supabase import Client
 
 from app.core.database import get_db
-from app.services.settings_services import get_workspace_uuid_for_request, get_subitems_for_template
-from app.schemas.templates_schemas import (
+from app.services.settings import get_workspace_uuid_for_request, get_subitems_for_template
+from app.schemas.templates import (
     TemplateCreateRequest, TemplateUpdateRequest,
     TemplateResponse,      TemplatesListResponse,
     SubitemResponse,

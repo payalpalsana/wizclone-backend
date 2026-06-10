@@ -10,4 +10,7 @@ __pycache__/
 dist/
 .pytest_cache/
 boards.txt
-Untitled-2.txt
+All.txt
+crypto.txt
+Old_Supabase.txt
+git

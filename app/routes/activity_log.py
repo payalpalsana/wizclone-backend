@@ -22,11 +22,11 @@ from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from supabase import Client
 from app.core.database import get_db
 from typing import Optional, List
-from app.services.activity_log_services import (
+from app.services.activity_log import (
     _time_ago, _duration_str, _get_copied_subitem_names,
 )
-from app.services.settings_services import get_workspace_uuid_for_request
-from app.schemas.activity_log_schemas import ActivityLogResponse, ActivityLogItem
+from app.services.settings import get_workspace_uuid_for_request
+from app.schemas.activity_log import ActivityLogResponse, ActivityLogItem
 
 router = APIRouter(prefix="/api", tags=["Activity Log"])
 

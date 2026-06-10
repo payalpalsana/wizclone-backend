@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # ── App ──
     app_env:      str   # "development" | "production"
     app_port:     int
-    app_base_url: str   # e.g. https://your-domain.com — used to build webhook URLs
+    app_base_url: str   # e.g. https://g4j5rg19-8000.inc1.devtunnels.ms — used to build webhook URLs
 
     # ── monday.com OAuth endpoints ──
     monday_authorize_url: str    # "https://auth.monday.com/oauth2/authorize"

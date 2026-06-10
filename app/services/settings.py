@@ -1,4 +1,4 @@
-# app/services/settings_service.py
+# app/services/settings.py
 
 import httpx
 from fastapi import HTTPException
@@ -12,14 +12,6 @@ MONDAY_API_URL = settings.monday_api_url
 # Workspace helpers
 # ─────────────────────────────────────────
 def get_workspace_by_monday_id(monday_workspace_id: str, db: Client) -> dict:
-    """
-    Resolve monday_workspace_id → full workspace row.
-    Falls back to monday_account_id if workspace_id lookup misses
-    (happens when OAuth callback stored account_id before workspace_id was known).
-    Returns: id, access_token
-    Raises HTTP 404 if not found.
-    """
-    # Try monday_workspace_id first
     try:
         result = db.table("workspaces") \
             .select("id, access_token, monday_account_id") \
@@ -31,7 +23,6 @@ def get_workspace_by_monday_id(monday_workspace_id: str, db: Client) -> dict:
     except Exception:
         pass
 
-    # Fallback: treat the value as monday_account_id
     try:
         result = db.table("workspaces") \
             .select("id, access_token, monday_account_id") \
@@ -47,34 +38,37 @@ def get_workspace_by_monday_id(monday_workspace_id: str, db: Client) -> dict:
 
 
 def get_workspace_uuid(monday_workspace_id: str, db: Client) -> str:
-    """Shorthand — returns just the internal UUID string."""
     return get_workspace_by_monday_id(monday_workspace_id, db)["id"]
 
 
 # ─────────────────────────────────────────
 # monday.com board fetching
-# Fetches boards ONLY for specific workspace
-# (merged from boards.py)
 # ─────────────────────────────────────────
+
+# monday.com board_kind values:
+#   "public"   → normal boards  ✅ show these
+#   "private"  → private boards ✅ show these
+#   "share"    → shareable boards ✅ show these
+#   "subtasks" → hidden subitem boards ❌ NEVER show — webhooks not allowed on these
+
+EXCLUDED_BOARD_KINDS = {"subtasks"}
+
+
 async def fetch_monday_boards(access_token: str, workspace_id: int) -> list[dict]:
     """
     Fetch boards from monday.com for a SPECIFIC workspace only.
+    Filters out subitem boards (board_kind = subtasks) — monday.com
+    does not allow webhook creation on those boards.
 
-    Uses workspace_ids filter in GraphQL so we never get
-    boards from other workspaces even if token has access to them.
-
-    Returns list of {id, name} dicts.
-    Raises exception on failure.
+    Returns list of {id, name} dicts — only real boards the user can monitor.
     """
 
-    # All (public + private + subitem)
     query = """
     query GetBoards($workspaceIds: [ID!]) {
       boards(
         limit: 100,
         order_by: created_at,
-        workspace_ids: $workspaceIds,
-        board_kind: public
+        workspace_ids: $workspaceIds
       ) {
         id
         name
@@ -82,51 +76,6 @@ async def fetch_monday_boards(access_token: str, workspace_id: int) -> list[dict
       }
     }
     """
-
-    # # Public only
-    # query = """
-    # query GetBoards($workspaceIds: [ID!]) {
-    # boards(
-    #     limit: 100,
-    #     order_by: created_at,
-    #     workspace_ids: $workspaceIds,
-    #     board_kind: public
-    # ) {
-    #     id
-    #     name
-    # }
-    # }
-    # """
-
-    # # Private only
-    # query = """
-    # query GetBoards($workspaceIds: [ID!]) {
-    # boards(
-    #     limit: 100,
-    #     order_by: created_at,
-    #     workspace_ids: $workspaceIds,
-    #     board_kind: public
-    # ) {
-    #     id
-    #     name
-    # }
-    # }
-    # """
-
-    # # Subitems only
-    # query = """
-    # query GetBoards($workspaceIds: [ID!]) {
-    # boards(
-    #     limit: 100,
-    #     order_by: created_at,
-    #     workspace_ids: $workspaceIds,
-    #     board_kind: share
-    # ) {
-    #     id
-    #     name
-    # }
-    # }
-    # """
 
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.post(
@@ -143,25 +92,45 @@ async def fetch_monday_boards(access_token: str, workspace_id: int) -> list[dict
                 "API-Version":   "2024-01",
             },
         )
+
     response.raise_for_status()
     data = response.json()
 
     if "errors" in data:
         raise Exception(f"monday.com GraphQL error: {data['errors']}")
 
-    return data.get("data", {}).get("boards", [])
+    all_boards = data.get("data", {}).get("boards", [])
 
+    # for b in all_boards:
+    #     print(f"[DEBUG] board: '{b['name']}' — kind: '{b['board_kind']}'")
 
+    # ── Filter out subitem boards ──
+    # board_kind = "subtasks" → hidden internal board monday creates
+    # for every board's subitems. Webhooks are NOT allowed on these.
+
+    # real_boards = [
+    #     b for b in all_boards
+    #     if b.get("board_kind") not in EXCLUDED_BOARD_KINDS
+    # ]
+
+    real_boards = [
+        b for b in all_boards
+        if not b.get("name", "").startswith("Subitems of")
+    ]
+
+    print(
+        f"[settings_service] Fetched {len(all_boards)} boards, "
+        f"filtered to {len(real_boards)} (removed "
+        f"{len(all_boards) - len(real_boards)} subitem boards)"
+    )
+
+    return real_boards
 
 
 # ─────────────────────────────────────────
 # Template / subitem helpers
 # ─────────────────────────────────────────
 def get_subitems_for_template(template_id: str, db: Client) -> list[dict]:
-    """
-    Fetch all active subitems for a template ordered by sort_order.
-    Returns list of {id, name, sort_order} dicts.
-    """
     try:
         result = db.table("template_subitems") \
             .select("id, name, sort_order") \
@@ -181,10 +150,6 @@ def get_subitems_for_template(template_id: str, db: Client) -> list[dict]:
 # Settings helpers
 # ─────────────────────────────────────────
 def get_workspace_settings(workspace_uuid: str, db: Client) -> dict | None:
-    """
-    Fetch workspace_settings row for the given internal UUID.
-    Returns the settings dict, or None if not found.
-    """
     try:
         result = db.table("workspace_settings") \
             .select("*") \
@@ -197,12 +162,6 @@ def get_workspace_settings(workspace_uuid: str, db: Client) -> dict | None:
 
 
 def get_workspace_uuid_for_request(request, workspace_id_fallback: str, db: Client) -> str:
-    """
-    Resolve workspace UUID from session token account_id (preferred)
-    or monday_workspace_id path param (fallback).
-    Consistent with the pattern used in settings and auth routes.
-    """
-    from fastapi import HTTPException
     token_data = getattr(request.state, "token_data", {})
     account_id = token_data.get("account_id")
 
@@ -222,10 +181,6 @@ def get_workspace_uuid_for_request(request, workspace_id_fallback: str, db: Clie
 
 
 def get_workspace_sensitivity(workspace_uuid: str, db: Client) -> str:
-    """
-    Returns AI sensitivity for the workspace.
-    Falls back to BALANCED if not found.
-    """
     settings_row = get_workspace_settings(workspace_uuid, db)
     if settings_row:
         return settings_row.get("ai_sensitivity", "BALANCED")

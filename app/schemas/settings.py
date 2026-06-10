@@ -1,4 +1,4 @@
-# app/schemas/settings_schemas.py
+# app/schemas/settings.py
 
 from pydantic import BaseModel
 from typing import Optional, List

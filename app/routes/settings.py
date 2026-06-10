@@ -16,28 +16,30 @@
 # SAVE handles all 3 things:
 #   1. sensitivity        → update workspace_settings.ai_sensitivity
 #   2. automation_enabled → global toggle
-#      OFF → delete webhooks for all is_enabled=true boards
-#      ON  → create webhooks for ALL boards
+#      OFF → keep webhook_id, just flip is_enabled=false (receiver returns 6000)
+#      ON  → reuse existing webhook_id or create new if missing
 #   3. boards[]           → individual board enable/disable
-#      board_enabled=true  → create webhook + is_enabled=true in DB
-#      board_enabled=false → delete webhook + is_enabled=false in DB
+#      board_enabled=true  → reuse webhook_id or create new if missing
+#      board_enabled=false → keep webhook_id, just flip is_enabled=false
 #
 # Session token → Authorization header
 # workspaceId   → request body
 # ─────────────────────────────────────────────────────────────
 
+
 from datetime import datetime, timezone
+import asyncio
 
 from fastapi  import APIRouter, HTTPException, Request, Depends
 from supabase import Client
 
 from app.core.database   import get_db
-from app.schemas.settings_schemas import (
+from app.schemas.settings import (
     SettingsLoadRequest, SettingsSaveRequest,
     SettingsResponse, BoardSetting,
 )
-from app.services.webhook_services  import create_webhook, delete_webhook
-from app.services.settings_services import (
+from app.services.webhook  import create_webhook, delete_webhook
+from app.services.settings import (
     get_workspace_by_monday_id,
     fetch_monday_boards,
 )
@@ -51,23 +53,9 @@ router = APIRouter(prefix="/api/settings", tags=["Settings"])
 @router.post("/load", response_model=SettingsResponse)
 async def load_settings(
     request: Request,
-    body: SettingsLoadRequest,
-    db:   Client = Depends(get_db),
+    body:    SettingsLoadRequest,
+    db:      Client = Depends(get_db),
 ):
-    """
-    Called every time the Settings page opens.
-    workspaceId in body, session token in Authorization header.
-
-    Syncs monday.com boards with DB:
-    - New board  → insert with is_enabled=false (toggle OFF)
-    - Deleted board → delete webhook + soft delete from DB
-    - Same → do nothing
-
-    Returns final board list + sensitivity + automation toggle.
-    """
-
-    # Prefer account_id from decoded session token (stamped by middleware)
-    # Fall back to workspaceId from body for backwards compat
     token_data = getattr(request.state, "token_data", {})
     account_id = token_data.get("account_id")
 
@@ -83,7 +71,6 @@ async def load_settings(
             workspace = None
         if not workspace:
             raise HTTPException(status_code=404, detail="Workspace not found")
-        # Stamp monday_workspace_id if still missing
         if not ws_result.data.get("monday_workspace_id"):
             try:
                 db.table("workspaces").update({
@@ -97,7 +84,6 @@ async def load_settings(
     workspace_uuid = workspace["id"]
     access_token   = workspace["access_token"]
 
-    # ── Fetch workspace settings ──
     try:
         ws_result = db.table("workspace_settings") \
             .select("ai_sensitivity, is_enabled") \
@@ -107,23 +93,16 @@ async def load_settings(
         ws_data = ws_result.data or {}
     except Exception:
         ws_data = {}
-
-    # ══════════════════════════════════════════════════════
-    # SYNC LOGIC
-    # ══════════════════════════════════════════════════════
-
-    # ── Step 1: Fetch boards from monday.com (THIS workspace only) ──
+    
     try:
         monday_boards    = await fetch_monday_boards(access_token, body.workspaceId)
         monday_board_ids = {str(b["id"]) for b in monday_boards}
         monday_board_map = {str(b["id"]): b["name"] for b in monday_boards}
     except Exception:
-        # If monday.com call fails → skip sync, return DB data only
         monday_boards    = []
         monday_board_ids = set()
         monday_board_map = {}
 
-    # ── Step 2: Fetch boards from DB ──
     try:
         db_result = db.table("monitored_boards") \
             .select("id, board_id, board_name, is_enabled, webhook_id") \
@@ -140,8 +119,7 @@ async def load_settings(
 
     now = datetime.now(timezone.utc).isoformat()
 
-    # ── Step 3a: New boards (in monday but not in DB) ──
-    # Insert with is_enabled=false → shows as OFF in UI
+    # New boards → insert with is_enabled=False, webhook_id=None
     new_board_ids = monday_board_ids - db_board_ids
     for board_id in new_board_ids:
         try:
@@ -155,17 +133,14 @@ async def load_settings(
                 "is_active":      True,
             }).execute()
         except Exception:
-            pass   # non-critical — continue with other boards
+            pass
 
-    # ── Step 3b: Deleted boards (in DB but not in monday) ──
-    # Delete webhook from monday.com + soft delete from DB
+    # Deleted boards → delete webhook + soft delete from DB
     deleted_board_ids = db_board_ids - monday_board_ids
     for board_id in deleted_board_ids:
         db_board = db_board_map.get(board_id)
         if not db_board:
             continue
-
-        # Delete webhook from monday.com if exists
         if db_board.get("webhook_id"):
             try:
                 await delete_webhook(
@@ -174,8 +149,6 @@ async def load_settings(
                 )
             except Exception:
                 pass
-
-        # Soft delete from DB
         try:
             db.table("monitored_boards") \
                 .update({
@@ -189,9 +162,6 @@ async def load_settings(
         except Exception:
             pass
 
-    # ── Step 4: Fetch final board list from DB ──
-    # Re-fetch after sync so new boards are included
-    # Soft deleted boards excluded automatically
     try:
         final_result = db.table("monitored_boards") \
             .select("board_id, board_name, is_enabled") \
@@ -228,15 +198,6 @@ async def save_settings(
     request: Request,
     db:      Client = Depends(get_db),
 ):
-    """
-    Single API — saves everything together.
-    workspaceId in body, session token in Authorization header.
-
-    Part 1 — sensitivity + global toggle → workspace_settings (DB only)
-    Part 2 — global automation toggle    → webhook create/delete on monday.com
-    Part 3 — individual board toggles   → webhook create/delete + DB update
-    """
-
     token_data = getattr(request.state, "token_data", {})
     account_id = token_data.get("account_id")
 
@@ -258,14 +219,17 @@ async def save_settings(
     workspace_uuid = workspace["id"]
     access_token   = workspace["access_token"]
 
+    # ── DEBUG: log exact payload ──
+    print(f"[save] automation_enabled={body.automation_enabled}")
+    print(f"[save] sensitivity={body.sensitivity}")
+    print(f"[save] boards={[(b.board_id, b.board_enabled) for b in body.boards] if body.boards else None}")
+
     # ══════════════════════════════════════════════════════
     # PART 1 — Save sensitivity + global toggle to DB only
     # ══════════════════════════════════════════════════════
     ws_update = {}
-
     if body.sensitivity is not None:
         ws_update["ai_sensitivity"] = body.sensitivity.upper()
-
     if body.automation_enabled is not None:
         ws_update["is_enabled"] = body.automation_enabled
 
@@ -275,7 +239,6 @@ async def save_settings(
                 .select("id") \
                 .eq("workspace_id", workspace_uuid) \
                 .execute()
-
             if existing_ws.data:
                 db.table("workspace_settings") \
                     .update(ws_update) \
@@ -289,7 +252,6 @@ async def save_settings(
                 ws_update.setdefault("exact_match_fallback_enabled",  True)
                 ws_update.setdefault("onboarding_completed",          False)
                 db.table("workspace_settings").insert(ws_update).execute()
-
         except Exception as e:
             raise HTTPException(
                 status_code=500,
@@ -298,137 +260,169 @@ async def save_settings(
 
     # ══════════════════════════════════════════════════════
     # PART 2 — Global automation toggle
-    # OFF → delete webhooks for all is_enabled=true boards only
-    # ON  → create webhooks for ALL boards
+    #
+    # Global OFF:
+    #   → Delete webhooks for ALL boards that have a webhook_id
+    #   → Clear webhook_id + set is_enabled=False for ALL boards
+    #   → Skip Part 3 completely (ignore body.boards)
+    #
+    # Global ON:
+    #   → Do nothing here
+    #   → Part 3 handles creating webhooks based on body.boards
     # ══════════════════════════════════════════════════════
-    if body.automation_enabled is not None:
-
+    if body.automation_enabled is not None and not body.automation_enabled:
+        # ── Global OFF ──
+        # Fetch ALL boards that have a webhook_id (regardless of is_enabled)
         try:
             all_boards_result = db.table("monitored_boards") \
-                .select("board_id, is_enabled, webhook_id") \
+                .select("board_id, webhook_id") \
                 .eq("workspace_id", workspace_uuid) \
-                .is_("deleted_at", "null") \
+                .is_("deleted_at",  "null") \
                 .execute()
             all_boards = all_boards_result.data or []
         except Exception:
             all_boards = []
 
-        # ── Global OFF ──
-        if not body.automation_enabled:
-            for board in all_boards:
-                if not board.get("is_enabled"):
-                    continue   # already off → skip
+        print(f"[save] Global OFF — processing {len(all_boards)} boards")
 
-                if board.get("webhook_id"):
-                    try:
-                        await delete_webhook(
-                            access_token = access_token,
-                            webhook_id   = board["webhook_id"],
-                        )
-                    except Exception:
-                        pass
-
+        async def _global_off_board(board):
+            # Delete webhook from monday.com if exists
+            if board.get("webhook_id"):
+                print(f"[save] Deleting webhook {board['webhook_id']} for board {board['board_id']}")
                 try:
-                    db.table("monitored_boards") \
-                        .update({
-                            "is_enabled":     False,
-                            "webhook_id":     None,
-                            "webhook_status": "DISABLED",
-                        }) \
-                        .eq("workspace_id", workspace_uuid) \
-                        .eq("board_id",     board["board_id"]) \
-                        .execute()
-                except Exception as e:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"Failed to disable board {board['board_id']}: {str(e)}",
-                    )
-
-        # ── Global ON ──
-        else:
-            for board in all_boards:
-                try:
-                    webhook_id = await create_webhook(
+                    await delete_webhook(
                         access_token = access_token,
-                        board_id     = board["board_id"],
-                        workspace_id = str(body.workspaceId),
+                        webhook_id   = board["webhook_id"],
                     )
-                    db.table("monitored_boards") \
-                        .update({
-                            "is_enabled":     True,
-                            "webhook_id":     str(webhook_id) if webhook_id else None,
-                            "webhook_status": "ACTIVE" if webhook_id else "DISABLED",
-                        }) \
-                        .eq("workspace_id", workspace_uuid) \
-                        .eq("board_id",     board["board_id"]) \
-                        .execute()
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[save] delete_webhook failed for board {board['board_id']}: {e}")
+
+            # Always update DB regardless of webhook delete result
+            try:
+                db.table("monitored_boards") \
+                    .update({
+                        "is_enabled":     False,
+                        "webhook_id":     None,
+                        "webhook_status": "DISABLED",
+                    }) \
+                    .eq("workspace_id", workspace_uuid) \
+                    .eq("board_id",     board["board_id"]) \
+                    .execute()
+            except Exception as e:
+                print(f"[save] DB disable failed for board {board['board_id']}: {e}")
+
+        await asyncio.gather(*[_global_off_board(b) for b in all_boards])
+
+        # Global OFF done — skip Part 3 entirely
+        # Do NOT process body.boards — global OFF overrides everything
+        try:
+            final_boards = db.table("monitored_boards") \
+                .select("board_id, board_name, is_enabled, webhook_status") \
+                .eq("workspace_id", workspace_uuid) \
+                .is_("deleted_at",  "null") \
+                .execute()
+            boards_data = final_boards.data or []
+        except Exception:
+            boards_data = []
+
+        return {
+            "success": True,
+            "message": "Automation disabled — all webhooks removed",
+            "boards":  boards_data,
+        }
 
     # ══════════════════════════════════════════════════════
     # PART 3 — Individual board toggles
-    # ENABLE/RE-ENABLE → create_webhook() + is_enabled=true
-    # DISABLE          → delete_webhook() + is_enabled=false
+    # Runs for:
+    #   - Normal save (sensitivity change, individual board toggles)
+    #   - Global ON (frontend sends all boards with their desired states)
+    #
+    # ENABLE  → create webhook if missing, reuse if exists
+    # DISABLE → delete webhook + clear webhook_id in DB
     # ══════════════════════════════════════════════════════
     if body.boards is not None:
-        for board in body.boards:
 
-            try:
-                existing_result = db.table("monitored_boards") \
-                    .select("*") \
-                    .eq("workspace_id", workspace_uuid) \
-                    .eq("board_id",     board.board_id) \
-                    .is_("deleted_at",  "null") \
-                    .execute()
-                existing = existing_result.data[0] if existing_result.data else None
-            except Exception:
-                existing = None
+        # Fetch all current board states in one query
+        try:
+            all_existing_result = db.table("monitored_boards") \
+                .select("*") \
+                .eq("workspace_id", workspace_uuid) \
+                .is_("deleted_at",  "null") \
+                .execute()
+            existing_map = {
+                str(b["board_id"]): b
+                for b in (all_existing_result.data or [])
+            }
+        except Exception:
+            existing_map = {}
+
+        async def process_board(board):
+            existing = existing_map.get(str(board.board_id))
 
             # ── ENABLE or RE-ENABLE ──
             if board.board_enabled:
+                existing_webhook_id = existing.get("webhook_id") if existing else None
 
-                webhook_id = await create_webhook(
-                    access_token = access_token,
-                    board_id     = board.board_id,
-                    workspace_id = str(body.workspaceId),
-                )
-
-                row = {
-                    "workspace_id":   workspace_uuid,
-                    "board_id":       board.board_id,
-                    "board_name":     board.board_name,
-                    "is_enabled":     True,
-                    "webhook_id":     str(webhook_id) if webhook_id else None,
-                    "webhook_status": "ACTIVE" if webhook_id else "DISABLED",
-                    "is_active":      True,
-                }
-
-                try:
-                    if existing:
+                if existing_webhook_id:
+                    # Reuse existing webhook — no new automation created
+                    print(f"[save] Reusing webhook {existing_webhook_id} for board {board.board_id}")
+                    try:
                         db.table("monitored_boards") \
-                            .update(row) \
+                            .update({
+                                "is_enabled":     True,
+                                "webhook_status": "ACTIVE",
+                                "board_name":     board.board_name,
+                            }) \
                             .eq("workspace_id", workspace_uuid) \
                             .eq("board_id",     board.board_id) \
                             .execute()
-                    else:
-                        db.table("monitored_boards").insert(row).execute()
-                except Exception as e:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"DB save failed for board {board.board_id}: {str(e)}",
+                    except Exception as e:
+                        print(f"[save] DB update failed for board {board.board_id}: {e}")
+                else:
+                    # No webhook → create one
+                    print(f"[save] Creating new webhook for board {board.board_id}")
+                    webhook_id = await create_webhook(
+                        access_token = access_token,
+                        board_id     = board.board_id,
+                        workspace_id = str(body.workspaceId),
                     )
+                    if webhook_id is None:
+                        print(f"[save] Webhook creation failed for board {board.board_id}")
+
+                    row = {
+                        "workspace_id":   workspace_uuid,
+                        "board_id":       board.board_id,
+                        "board_name":     board.board_name,
+                        "is_enabled":     True if webhook_id else False,
+                        "webhook_id":     str(webhook_id) if webhook_id else None,
+                        "webhook_status": "ACTIVE" if webhook_id else "DISABLED",
+                        "is_active":      True,
+                    }
+
+                    try:
+                        if existing:
+                            db.table("monitored_boards") \
+                                .update(row) \
+                                .eq("workspace_id", workspace_uuid) \
+                                .eq("board_id",     board.board_id) \
+                                .execute()
+                        else:
+                            db.table("monitored_boards").insert(row).execute()
+                    except Exception as e:
+                        print(f"[save] DB save failed for board {board.board_id}: {e}")
 
             # ── DISABLE ──
             else:
-
+                # Delete webhook → automation toggle goes OFF on monday.com
                 if existing and existing.get("webhook_id"):
+                    print(f"[save] Deleting webhook {existing['webhook_id']} for board {board.board_id}")
                     try:
                         await delete_webhook(
                             access_token = access_token,
                             webhook_id   = existing["webhook_id"],
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[save] delete_webhook failed: {e}")
 
                 row = {
                     "is_enabled":     False,
@@ -452,9 +446,23 @@ async def save_settings(
                             **row,
                         }).execute()
                 except Exception as e:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"DB update failed for board {board.board_id}: {str(e)}",
-                    )
+                    print(f"[save] DB update failed for board {board.board_id}: {e}")
 
-    return {"success": True, "message": "Settings saved successfully"}
+        await asyncio.gather(*[process_board(b) for b in body.boards])
+
+    # ── Return final board states ──
+    try:
+        final_boards = db.table("monitored_boards") \
+            .select("board_id, board_name, is_enabled, webhook_status") \
+            .eq("workspace_id", workspace_uuid) \
+            .is_("deleted_at",  "null") \
+            .execute()
+        boards_data = final_boards.data or []
+    except Exception:
+        boards_data = []
+
+    return {
+        "success": True,
+        "message": "Settings saved successfully",
+        "boards":  boards_data,
+    }
