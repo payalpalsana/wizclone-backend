@@ -115,6 +115,22 @@ async def load_settings(
 
         now = datetime.now(timezone.utc).isoformat()
 
+        # New boards → insert with is_enabled=False, webhook_id=None
+        new_board_ids = monday_board_ids - db_board_ids
+        for board_id in new_board_ids:
+            try:
+                db.table("monitored_boards").insert({
+                    "workspace_id":   workspace_uuid,
+                    "board_id":       int(board_id),
+                    "board_name":     monday_board_map.get(board_id, ""),
+                    "is_enabled":     False,
+                    "webhook_id":     None,
+                    "webhook_status": "DISABLED",
+                    "is_active":      True,
+                }).execute()
+            except Exception:
+                pass
+
         # Deleted boards → delete webhook + soft delete from DB
         deleted_board_ids = db_board_ids - monday_board_ids
         for board_id in deleted_board_ids:
@@ -148,8 +164,7 @@ async def load_settings(
         final_result = db.table("monitored_boards") \
             .select("board_id, board_name, is_enabled") \
             .eq("workspace_id", workspace_uuid) \
-            .eq("is_enabled",   True) \
-            .is_("deleted_at",  "null") \
+            .is_("deleted_at", "null") \
             .execute()
         final_boards = final_result.data or []
     except Exception:
@@ -421,13 +436,8 @@ async def save_settings(
                             .eq("board_id",     board.board_id) \
                             .execute()
                     else:
-                        db.table("monitored_boards").insert({
-                            "workspace_id": workspace_uuid,
-                            "board_id":     board.board_id,
-                            "board_name":   board.board_name,
-                            "is_active":    True,
-                            **row,
-                        }).execute()
+                        # DO NOT insert disabled boards that do not exist in DB
+                        pass
                 except Exception as e:
                     print(f"[save] DB update failed for board {board.board_id}: {e}")
 
@@ -438,6 +448,7 @@ async def save_settings(
         final_boards = db.table("monitored_boards") \
             .select("board_id, board_name, is_enabled, webhook_status") \
             .eq("workspace_id", workspace_uuid) \
+            .eq("is_enabled",   True) \
             .is_("deleted_at",  "null") \
             .execute()
         boards_data = final_boards.data or []
