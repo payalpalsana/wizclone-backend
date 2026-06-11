@@ -115,22 +115,6 @@ async def load_settings(
 
         now = datetime.now(timezone.utc).isoformat()
 
-        # New boards → insert with is_enabled=False, webhook_id=None
-        new_board_ids = monday_board_ids - db_board_ids
-        for board_id in new_board_ids:
-            try:
-                db.table("monitored_boards").insert({
-                    "workspace_id":   workspace_uuid,
-                    "board_id":       int(board_id),
-                    "board_name":     monday_board_map.get(board_id, ""),
-                    "is_enabled":     False,
-                    "webhook_id":     None,
-                    "webhook_status": "DISABLED",
-                    "is_active":      True,
-                }).execute()
-            except Exception:
-                pass
-
         # Deleted boards → delete webhook + soft delete from DB
         deleted_board_ids = db_board_ids - monday_board_ids
         for board_id in deleted_board_ids:
@@ -164,7 +148,8 @@ async def load_settings(
         final_result = db.table("monitored_boards") \
             .select("board_id, board_name, is_enabled") \
             .eq("workspace_id", workspace_uuid) \
-            .is_("deleted_at", "null") \
+            .eq("is_enabled",   True) \
+            .is_("deleted_at",  "null") \
             .execute()
         final_boards = final_result.data or []
     except Exception:
