@@ -22,6 +22,7 @@ def verify_session_token(token: str) -> dict | None:
             settings.monday_client_secret,
             algorithms=["HS256"],
             options={"verify_aud": False,},   # monday session tokens have no aud claim
+            leeway=120,                       # handle clock skew
         )
     except jwt.ExpiredSignatureError:
         return None   # token expired
@@ -43,7 +44,7 @@ def verify_authorization_token(token: str) -> dict | None:
  
     Returns decoded payload on success, None on failure.
     Decoded shape:
-    {
+    { 
         "userId":    123,
         "accountId": 456,
         "backToUrl": "https://monday.com/boards/...",
@@ -57,6 +58,7 @@ def verify_authorization_token(token: str) -> dict | None:
             settings.monday_signing_secret,
             algorithms=["HS256"],
             options={"verify_aud": False},
+            leeway=120,                       # handle clock skew
         )
     except jwt.ExpiredSignatureError:
         return None

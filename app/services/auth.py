@@ -29,6 +29,7 @@ def _verify_session_token(token: str) -> dict | None:
             settings.monday_client_secret,
             algorithms=["HS256"],
             options={"verify_aud": False},
+            leeway=120,  # Handle clock skew
         )
     except jwt.ExpiredSignatureError:
         return None   # expired
@@ -56,6 +57,7 @@ def _verify_authorization_token(token: str) -> dict | None:
             settings.monday_signing_secret,
             algorithms=["HS256"],
             options={"verify_aud": False},
+            leeway=120,  # Handle clock skew
         )
     except jwt.ExpiredSignatureError:
         return None

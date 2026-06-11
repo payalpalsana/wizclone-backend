@@ -12,10 +12,14 @@ MONDAY_API_URL = settings.monday_api_url
 # Workspace helpers
 # ─────────────────────────────────────────
 def get_workspace_by_monday_id(monday_workspace_id: str, db: Client) -> dict:
+    # Validate that workspace ID is numeric to prevent DB syntax errors
+    if not monday_workspace_id or not str(monday_workspace_id).strip().isdigit():
+        raise HTTPException(status_code=400, detail="Invalid workspace ID format")
+
     try:
         result = db.table("workspaces") \
             .select("id, access_token, monday_account_id") \
-            .eq("monday_workspace_id", str(monday_workspace_id)) \
+            .eq("monday_workspace_id", int(monday_workspace_id)) \
             .single() \
             .execute()
         if result.data:
@@ -26,7 +30,7 @@ def get_workspace_by_monday_id(monday_workspace_id: str, db: Client) -> dict:
     try:
         result = db.table("workspaces") \
             .select("id, access_token, monday_account_id") \
-            .eq("monday_account_id", str(monday_workspace_id)) \
+            .eq("monday_account_id", int(monday_workspace_id)) \
             .single() \
             .execute()
         if result.data:
@@ -168,12 +172,21 @@ def get_workspace_uuid_for_request(request, workspace_id_fallback: str, db: Clie
     if account_id:
         try:
             result = db.table("workspaces") \
-                .select("id") \
+                .select("id, monday_workspace_id") \
                 .eq("monday_account_id", int(account_id)) \
                 .single() \
                 .execute()
             if result.data:
-                return result.data["id"]
+                ws_data = result.data
+                # Self-healing: if monday_workspace_id is NULL in DB, and fallback is a valid digit, stamp it.
+                if not ws_data.get("monday_workspace_id") and workspace_id_fallback and str(workspace_id_fallback).strip().isdigit():
+                    try:
+                        db.table("workspaces").update({
+                            "monday_workspace_id": int(workspace_id_fallback)
+                        }).eq("id", ws_data["id"]).execute()
+                    except Exception:
+                        pass
+                return ws_data["id"]
         except Exception:
             pass
 
