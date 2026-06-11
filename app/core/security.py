@@ -17,13 +17,18 @@ def verify_session_token(token: str) -> dict | None:
     Returns decoded payload on success, None on failure.
     """
     try:
-        return jwt.decode(
+        import time
+        t0 = time.time()
+        decoded = jwt.decode(
             token,
             settings.monday_client_secret,
             algorithms=["HS256"],
             options={"verify_aud": False,},   # monday session tokens have no aud claim
             leeway=120,                       # handle clock skew
         )
+        t1 = time.time()
+        print(f"[auth] jwt.decode(session) took {(t1 - t0) * 1000:.2f} ms")
+        return decoded
     except jwt.ExpiredSignatureError:
         return None   # token expired
     except jwt.InvalidTokenError:

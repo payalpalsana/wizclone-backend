@@ -56,8 +56,14 @@ async def load_settings(
     body:    SettingsLoadRequest,
     db:      Client = Depends(get_db),
 ):
+    import time
+    t_start = time.time()
+    print(f"\n[load] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print(f"[load] --- START LOAD SETTINGS ---")
+    
     token_data = getattr(request.state, "token_data", {})
     account_id = token_data.get("account_id")
+    print(f"[load] Extracted account_id from token: {account_id}")
 
     if account_id:
         try:
@@ -108,8 +114,15 @@ async def load_settings(
         db_board_ids = set()
         db_board_map = {}
 
+    print(f"[load] Starting monday.com boards sync...")
+    t_monday_start = time.time()
     try:
-        monday_boards    = await fetch_monday_boards(access_token, body.workspaceId)
+        monday_boards    = await asyncio.wait_for(
+            fetch_monday_boards(access_token, body.workspaceId),
+            timeout=10,
+        )
+        t_monday_end = time.time()
+        print(f"[load] Monday.com sync completed in {(t_monday_end - t_monday_start) * 1000:.2f} ms")
         monday_board_ids = {str(b["id"]) for b in monday_boards}
         monday_board_map = {str(b["id"]): b["name"] for b in monday_boards}
 
@@ -141,6 +154,8 @@ async def load_settings(
                     .execute()
             except Exception:
                 pass
+    except asyncio.TimeoutError:
+        print("[load_settings] Monday.com board sync timed out — skipping sync, returning DB boards")
     except Exception as e:
         print(f"[load_settings] Monday.com board sync failed: {e}")
 
@@ -148,7 +163,6 @@ async def load_settings(
         final_result = db.table("monitored_boards") \
             .select("board_id, board_name, is_enabled") \
             .eq("workspace_id", workspace_uuid) \
-            .eq("is_enabled",   True) \
             .is_("deleted_at",  "null") \
             .execute()
         final_boards = final_result.data or []
@@ -163,6 +177,11 @@ async def load_settings(
         )
         for row in final_boards
     ]
+
+    print(f"[load] Returning {len(boards)} boards to frontend.")
+    t_end = time.time()
+    print(f"[load] --- END LOAD SETTINGS --- Total time: {(t_end - t_start) * 1000:.2f} ms")
+    print(f"[load] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
     return SettingsResponse(
         workspace_id       = str(body.workspaceId),
@@ -181,8 +200,12 @@ async def save_settings(
     request: Request,
     db:      Client = Depends(get_db),
 ):
+    print(f"\n[save] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print(f"[save] --- START SAVE SETTINGS ---")
+    
     token_data = getattr(request.state, "token_data", {})
     account_id = token_data.get("account_id")
+    print(f"[save] Extracted account_id from token: {account_id}")
 
     if account_id:
         try:
@@ -195,12 +218,15 @@ async def save_settings(
         except Exception:
             workspace = None
         if not workspace:
+            print(f"[save] ERROR: Workspace not found for account_id: {account_id}")
             raise HTTPException(status_code=404, detail="Workspace not found")
     else:
+        print(f"[save] No account_id in token, falling back to body.workspaceId: {body.workspaceId}")
         workspace = get_workspace_by_monday_id(str(body.workspaceId), db)
 
     workspace_uuid = workspace["id"]
     access_token   = workspace["access_token"]
+    print(f"[save] Workspace loaded successfully: uuid={workspace_uuid}")
 
     # ── DEBUG: log exact payload ──
     print(f"[save] automation_enabled={body.automation_enabled}")
@@ -280,11 +306,10 @@ async def save_settings(
                 except Exception as e:
                     print(f"[save] delete_webhook failed for board {board['board_id']}: {e}")
 
-            # Always update DB regardless of webhook delete result
+            # Clear webhook in DB — do NOT touch is_enabled so board stays in the list
             try:
                 db.table("monitored_boards") \
                     .update({
-                        "is_enabled":     False,
                         "webhook_id":     None,
                         "webhook_status": "DISABLED",
                     }) \
@@ -296,24 +321,6 @@ async def save_settings(
 
         await asyncio.gather(*[_global_off_board(b) for b in all_boards])
 
-        # Global OFF done — skip Part 3 entirely
-        # Do NOT process body.boards — global OFF overrides everything
-        try:
-            final_boards = db.table("monitored_boards") \
-                .select("board_id, board_name, is_enabled, webhook_status") \
-                .eq("workspace_id", workspace_uuid) \
-                .is_("deleted_at",  "null") \
-                .execute()
-            boards_data = final_boards.data or []
-        except Exception:
-            boards_data = []
-
-        return {
-            "success": True,
-            "message": "Automation disabled — all webhooks removed",
-            "boards":  boards_data,
-        }
-
     # ══════════════════════════════════════════════════════
     # PART 3 — Individual board toggles
     # Runs for:
@@ -323,6 +330,7 @@ async def save_settings(
     # ENABLE  → create webhook if missing, reuse if exists
     # DISABLE → delete webhook + clear webhook_id in DB
     # ══════════════════════════════════════════════════════
+    failed_boards = []
     if body.boards is not None:
 
         # Fetch all current board states in one query
@@ -336,14 +344,25 @@ async def save_settings(
                 str(b["board_id"]): b
                 for b in (all_existing_result.data or [])
             }
+            print(f"[save] Loaded {len(existing_map)} existing boards from DB for this workspace.")
         except Exception:
             existing_map = {}
 
         async def process_board(board):
             existing = existing_map.get(str(board.board_id))
+            error_board_name = None
+
+            print(f"\n[save] ┌── Processing board: {board.board_id} ('{board.board_name}')")
+            print(f"[save] │ Frontend sent: board_enabled={board.board_enabled}")
+            print(f"[save] │ Global automation: {body.automation_enabled}")
+
+            # Do we want to create/maintain a webhook? 
+            # Only if board is checked AND global automation is not OFF
+            wants_webhook = board.board_enabled and (body.automation_enabled is not False)
+            print(f"[save] │ wants_webhook evaluated to: {wants_webhook}")
 
             # ── ENABLE or RE-ENABLE ──
-            if board.board_enabled:
+            if wants_webhook:
                 existing_webhook_id = existing.get("webhook_id") if existing else None
 
                 if existing_webhook_id:
@@ -371,6 +390,7 @@ async def save_settings(
                     )
                     if webhook_id is None:
                         print(f"[save] Webhook creation failed for board {board.board_id}")
+                        error_board_name = board.board_name
 
                     row = {
                         "workspace_id":   workspace_uuid,
@@ -394,7 +414,7 @@ async def save_settings(
                     except Exception as e:
                         print(f"[save] DB save failed for board {board.board_id}: {e}")
 
-            # ── DISABLE ──
+            # ── DISABLE (or Global OFF but board is checked) ──
             else:
                 # Delete webhook → automation toggle goes OFF on monday.com
                 if existing and existing.get("webhook_id"):
@@ -408,7 +428,7 @@ async def save_settings(
                         print(f"[save] delete_webhook failed: {e}")
 
                 row = {
-                    "is_enabled":     False,
+                    "is_enabled":     board.board_enabled,  # Preserve the user's checkbox state!
                     "webhook_id":     None,
                     "webhook_status": "DISABLED",
                 }
@@ -421,27 +441,40 @@ async def save_settings(
                             .eq("board_id",     board.board_id) \
                             .execute()
                     else:
-                        # DO NOT insert disabled boards that do not exist in DB
-                        pass
+                        # Insert the board if the user checked it (even if global automation is off)
+                        if board.board_enabled:
+                            row["workspace_id"]   = workspace_uuid
+                            row["board_id"]       = board.board_id
+                            row["board_name"]     = board.board_name
+                            row["is_active"]      = True
+                            db.table("monitored_boards").insert(row).execute()
                 except Exception as e:
                     print(f"[save] DB update failed for board {board.board_id}: {e}")
 
-        await asyncio.gather(*[process_board(b) for b in body.boards])
+            return error_board_name
+
+        results = await asyncio.gather(*[process_board(b) for b in body.boards])
+        failed_boards = [name for name in results if name is not None]
 
     # ── Return final board states ──
     try:
         final_boards = db.table("monitored_boards") \
             .select("board_id, board_name, is_enabled, webhook_status") \
             .eq("workspace_id", workspace_uuid) \
-            .eq("is_enabled",   True) \
             .is_("deleted_at",  "null") \
             .execute()
         boards_data = final_boards.data or []
     except Exception:
         boards_data = []
 
+    success = len(failed_boards) == 0
+    message = "Settings saved successfully" if success else f"Failed to enable automation for: {', '.join(failed_boards)}"
+    print(f"[save] --- END SAVE SETTINGS --- success={success}, failed_boards={len(failed_boards)}")
+    print(f"[save] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+
     return {
-        "success": True,
-        "message": "Settings saved successfully",
+        "success": success,
+        "message": message,
+        "failed_boards": failed_boards,
         "boards":  boards_data,
     }

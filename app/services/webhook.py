@@ -47,7 +47,7 @@ async def create_webhook(
     """
 
     # Build the URL monday.com will POST to when an item is created
-    callback_url = f"{settings.app_base_url}/webhook/monday/{workspace_id}"
+    callback_url = f"{settings.app_base_url.rstrip('/')}/webhook/monday/{workspace_id}"
     print(f"[webhook_service] Registering webhook → board: {board_id} | url: {callback_url}")
 
     # GraphQL mutation to create webhook
@@ -80,6 +80,7 @@ async def create_webhook(
             )
 
         data = response.json()
+        print(f"[webhook_service] RAW response for board {board_id}: {data}")
 
         if "errors" in data:
             errors = data["errors"]
