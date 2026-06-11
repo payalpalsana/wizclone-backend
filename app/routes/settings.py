@@ -62,7 +62,7 @@ async def load_settings(
     if account_id:
         try:
             ws_result = db.table("workspaces") \
-                .select("id, access_token") \
+                .select("id, access_token, monday_workspace_id") \
                 .eq("monday_account_id", int(account_id)) \
                 .single() \
                 .execute()
@@ -95,15 +95,6 @@ async def load_settings(
         ws_data = {}
     
     try:
-        monday_boards    = await fetch_monday_boards(access_token, body.workspaceId)
-        monday_board_ids = {str(b["id"]) for b in monday_boards}
-        monday_board_map = {str(b["id"]): b["name"] for b in monday_boards}
-    except Exception:
-        monday_boards    = []
-        monday_board_ids = set()
-        monday_board_map = {}
-
-    try:
         db_result = db.table("monitored_boards") \
             .select("id, board_id, board_name, is_enabled, webhook_id") \
             .eq("workspace_id", workspace_uuid) \
@@ -117,50 +108,57 @@ async def load_settings(
         db_board_ids = set()
         db_board_map = {}
 
-    now = datetime.now(timezone.utc).isoformat()
+    try:
+        monday_boards    = await fetch_monday_boards(access_token, body.workspaceId)
+        monday_board_ids = {str(b["id"]) for b in monday_boards}
+        monday_board_map = {str(b["id"]): b["name"] for b in monday_boards}
 
-    # New boards → insert with is_enabled=False, webhook_id=None
-    new_board_ids = monday_board_ids - db_board_ids
-    for board_id in new_board_ids:
-        try:
-            db.table("monitored_boards").insert({
-                "workspace_id":   workspace_uuid,
-                "board_id":       int(board_id),
-                "board_name":     monday_board_map.get(board_id, ""),
-                "is_enabled":     False,
-                "webhook_id":     None,
-                "webhook_status": "DISABLED",
-                "is_active":      True,
-            }).execute()
-        except Exception:
-            pass
+        now = datetime.now(timezone.utc).isoformat()
 
-    # Deleted boards → delete webhook + soft delete from DB
-    deleted_board_ids = db_board_ids - monday_board_ids
-    for board_id in deleted_board_ids:
-        db_board = db_board_map.get(board_id)
-        if not db_board:
-            continue
-        if db_board.get("webhook_id"):
+        # New boards → insert with is_enabled=False, webhook_id=None
+        new_board_ids = monday_board_ids - db_board_ids
+        for board_id in new_board_ids:
             try:
-                await delete_webhook(
-                    access_token = access_token,
-                    webhook_id   = db_board["webhook_id"],
-                )
-            except Exception:
-                pass
-        try:
-            db.table("monitored_boards") \
-                .update({
-                    "deleted_at":     now,
+                db.table("monitored_boards").insert({
+                    "workspace_id":   workspace_uuid,
+                    "board_id":       int(board_id),
+                    "board_name":     monday_board_map.get(board_id, ""),
                     "is_enabled":     False,
                     "webhook_id":     None,
                     "webhook_status": "DISABLED",
-                }) \
-                .eq("id", db_board["id"]) \
-                .execute()
-        except Exception:
-            pass
+                    "is_active":      True,
+                }).execute()
+            except Exception:
+                pass
+
+        # Deleted boards → delete webhook + soft delete from DB
+        deleted_board_ids = db_board_ids - monday_board_ids
+        for board_id in deleted_board_ids:
+            db_board = db_board_map.get(board_id)
+            if not db_board:
+                continue
+            if db_board.get("webhook_id"):
+                try:
+                    await delete_webhook(
+                        access_token = access_token,
+                        webhook_id   = db_board["webhook_id"],
+                    )
+                except Exception:
+                    pass
+            try:
+                db.table("monitored_boards") \
+                    .update({
+                        "deleted_at":     now,
+                        "is_enabled":     False,
+                        "webhook_id":     None,
+                        "webhook_status": "DISABLED",
+                    }) \
+                    .eq("id", db_board["id"]) \
+                    .execute()
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[load_settings] Monday.com board sync failed: {e}")
 
     try:
         final_result = db.table("monitored_boards") \
