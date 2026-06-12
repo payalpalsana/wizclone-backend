@@ -84,114 +84,193 @@ def get_threshold(sensitivity: str) -> float:
 # APPLY FOR ACCESS:
 #   https://developer.monday.com/api-reference/docs/models-api
 
-USE_MODELS_API = False
-# ↑ Set to True ONLY after monday.com approves your Models API access request
-# ↑ Setting True without approval will cause 401 errors on every matching call
+USE_AI_MATCHING = True
 
 
-async def _models_api_match(
+# async def _models_api_match(
+#     item_name:      str,
+#     template_names: list[str],
+#     access_token:   str,
+# ) -> dict | None:
+#     """
+#     WHY THIS FUNCTION EXISTS:
+#         AI matching engine slot for monday.com Models API.
+#         When active, replaces difflib with real AI semantic understanding.
+#         Currently returns None so caller automatically uses difflib instead.
+#
+#     HOW IT WORKS WHEN ACTIVE:
+#         1. Builds a prompt listing all template names
+#         2. Asks AI: which template does this new item name belong to?
+#         3. AI returns best matching template name + confidence score 0-100
+#         4. We validate the name exists in our list and return the result
+#
+#     WHAT HAPPENS IF IT FAILS:
+#         Returns None — match_item_to_template() catches this and
+#         automatically falls back to difflib. Core functionality never breaks.
+#
+#     WHEN TO UNCOMMENT:
+#         When monday.com approves Models API access.
+#         Follow the 6 steps listed above in the comments.
+#     """
+#
+#     # ════════════════════════════════════════════════════════
+#     # STEP 4: UNCOMMENT THIS ENTIRE BLOCK WHEN MODELS API IS APPROVED
+#     # ════════════════════════════════════════════════════════
+#     #
+#     # from app.core.config import settings
+#     # import httpx
+#     #
+#     # # Build candidate list for the prompt
+#     # candidates = "\n".join(f"- {name}" for name in template_names)
+#     #
+#     # # Prompt instructs AI to match by intent not just exact words
+#     # prompt = (
+#     #     f"You are a template matcher for a task management tool.\n"
+#     #     f"Given the new item name, pick the BEST matching template "
+#     #     f"from the list. Consider intent and meaning, not just exact words.\n\n"
+#     #     f"New item name: {item_name}\n\n"
+#     #     f"Available templates:\n{candidates}\n\n"
+#     #     f"Reply with ONLY this format (nothing else):\n"
+#     #     f"<template name> | <confidence 0-100>\n\n"
+#     #     f"Example: New Client Onboarding | 87"
+#     # )
+#     #
+#     # try:
+#     #     async with httpx.AsyncClient(timeout=10) as client:
+#     #         response = await client.post(
+#     #             f"{settings.monday_models_api_url}/chat/completions",
+#     #             headers={
+#     #                 "Authorization": f"Bearer {access_token}",
+#     #                 "Content-Type":  "application/json",
+#     #             },
+#     #             json={
+#     #                 "model":      "monday-standard",
+#     #                 "messages":   [{"role": "user", "content": prompt}],
+#     #                 "max_tokens": 50,
+#     #             },
+#     #         )
+#     #
+#     #     if response.status_code != 200:
+#     #         print(f"[matching] Models API {response.status_code} — using difflib")
+#     #         return None
+#     #
+#     #     # Parse response — expected: "Template Name | 87"
+#     #     text  = response.json()["choices"][0]["message"]["content"].strip()
+#     #     parts = text.split("|")
+#     #
+#     #     if len(parts) != 2:
+#     #         print(f"[matching] Models API bad format: {text} — using difflib")
+#     #         return None
+#     #
+#     #     matched_name = parts[0].strip()
+#     #     confidence   = float(parts[1].strip())
+#     #
+#     #     # Safety: AI must return a name that exists in our template list
+#     #     # Prevents hallucinated template names from being accepted
+#     #     if matched_name not in template_names:
+#     #         print(f"[matching] Models API returned unknown template '{matched_name}' — using difflib")
+#     #         return None
+#     #
+#     #     print(f"[matching] Models API: '{matched_name}' at {confidence}%")
+#     #
+#     #     return {
+#     #         "matched_name": matched_name,
+#     #         "confidence":   confidence,
+#     #         "method":       "AI",    # saved to automation_events.match_method
+#     #         "ai_used":      True,    # ai_fallback_used = False in DB
+#     #     }
+#     #
+#     # except Exception as e:
+#     #     print(f"[matching] Models API error: {e} — using difflib")
+#     #     return None
+#     #
+#     # ════════════════════════════════════════════════════════
+#     # END OF BLOCK — STEP 4
+#     # ════════════════════════════════════════════════════════
+#
+#     # STEP 5: DELETE THIS LINE when you uncomment the block above
+#     return None
+
+
+async def _ai_semantic_match(
     item_name:      str,
     template_names: list[str],
-    access_token:   str,
 ) -> dict | None:
     """
-    WHY THIS FUNCTION EXISTS:
-        AI matching engine slot for monday.com Models API.
-        When active, replaces difflib with real AI semantic understanding.
-        Currently returns None so caller automatically uses difflib instead.
-
-    HOW IT WORKS WHEN ACTIVE:
-        1. Builds a prompt listing all template names
-        2. Asks AI: which template does this new item name belong to?
-        3. AI returns best matching template name + confidence score 0-100
-        4. We validate the name exists in our list and return the result
-
-    WHAT HAPPENS IF IT FAILS:
-        Returns None — match_item_to_template() catches this and
-        automatically falls back to difflib. Core functionality never breaks.
-
-    WHEN TO UNCOMMENT:
-        When monday.com approves Models API access.
-        Follow the 6 steps listed above in the comments.
+    Groq AI Matching Engine
     """
 
     # ════════════════════════════════════════════════════════
-    # STEP 4: UNCOMMENT THIS ENTIRE BLOCK WHEN MODELS API IS APPROVED
-    # ════════════════════════════════════════════════════════
-    #
-    # from app.core.config import settings
-    # import httpx
-    #
-    # # Build candidate list for the prompt
-    # candidates = "\n".join(f"- {name}" for name in template_names)
-    #
-    # # Prompt instructs AI to match by intent not just exact words
-    # prompt = (
-    #     f"You are a template matcher for a task management tool.\n"
-    #     f"Given the new item name, pick the BEST matching template "
-    #     f"from the list. Consider intent and meaning, not just exact words.\n\n"
-    #     f"New item name: {item_name}\n\n"
-    #     f"Available templates:\n{candidates}\n\n"
-    #     f"Reply with ONLY this format (nothing else):\n"
-    #     f"<template name> | <confidence 0-100>\n\n"
-    #     f"Example: New Client Onboarding | 87"
-    # )
-    #
-    # try:
-    #     async with httpx.AsyncClient(timeout=10) as client:
-    #         response = await client.post(
-    #             f"{settings.monday_models_api_url}/chat/completions",
-    #             headers={
-    #                 "Authorization": f"Bearer {access_token}",
-    #                 "Content-Type":  "application/json",
-    #             },
-    #             json={
-    #                 "model":      "monday-standard",
-    #                 "messages":   [{"role": "user", "content": prompt}],
-    #                 "max_tokens": 50,
-    #             },
-    #         )
-    #
-    #     if response.status_code != 200:
-    #         print(f"[matching] Models API {response.status_code} — using difflib")
-    #         return None
-    #
-    #     # Parse response — expected: "Template Name | 87"
-    #     text  = response.json()["choices"][0]["message"]["content"].strip()
-    #     parts = text.split("|")
-    #
-    #     if len(parts) != 2:
-    #         print(f"[matching] Models API bad format: {text} — using difflib")
-    #         return None
-    #
-    #     matched_name = parts[0].strip()
-    #     confidence   = float(parts[1].strip())
-    #
-    #     # Safety: AI must return a name that exists in our template list
-    #     # Prevents hallucinated template names from being accepted
-    #     if matched_name not in template_names:
-    #         print(f"[matching] Models API returned unknown template '{matched_name}' — using difflib")
-    #         return None
-    #
-    #     print(f"[matching] Models API: '{matched_name}' at {confidence}%")
-    #
-    #     return {
-    #         "matched_name": matched_name,
-    #         "confidence":   confidence,
-    #         "method":       "AI",    # saved to automation_events.match_method
-    #         "ai_used":      True,    # ai_fallback_used = False in DB
-    #     }
-    #
-    # except Exception as e:
-    #     print(f"[matching] Models API error: {e} — using difflib")
-    #     return None
-    #
-    # ════════════════════════════════════════════════════════
-    # END OF BLOCK — STEP 4
-    # ════════════════════════════════════════════════════════
+    from app.core.config import settings
+    import httpx
 
-    # STEP 5: DELETE THIS LINE when you uncomment the block above
-    return None
+    if not settings.groq_api_key:
+        print("[matching] No GROQ_API_KEY found — falling back to difflib")
+        return None
+
+    # Build candidate list for the prompt
+    candidates = "\n".join(f"- {name}" for name in template_names)
+
+    # Prompt instructs AI to match by intent not just exact words
+    prompt = (
+        f"You are a template matcher for a task management tool.\n"
+        f"Given the new item name, pick the BEST matching template "
+        f"from the list. Consider intent and meaning, not just exact words.\n\n"
+        f"New item name: {item_name}\n\n"
+        f"Available templates:\n{candidates}\n\n"
+        f"Reply with ONLY this format (nothing else):\n"
+        f"<template name> | <confidence 0-100>\n\n"
+        f"Example: New Client Onboarding | 87"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.groq_api_key}",
+                    "Content-Type":  "application/json",
+                },
+                json={
+                    "model":      "llama-3.1-8b-instant",
+                    "messages":   [{"role": "user", "content": prompt}],
+                    "max_tokens": 50,
+                },
+            )
+
+        if response.status_code != 200:
+            print(f"[matching] Groq API {response.status_code} — using difflib")
+            return None
+
+        # Parse response — expected: "Template Name | 87"
+        text  = response.json()["choices"][0]["message"]["content"].strip()
+        parts = text.split("|")
+
+        if len(parts) != 2:
+            print(f"[matching] Groq API bad format: {text} — using difflib")
+            return None
+
+        matched_name = parts[0].strip()
+        confidence   = float(parts[1].strip())
+
+        # Safety: AI must return a name that exists in our template list
+        # Prevents hallucinated template names from being accepted
+        if matched_name not in template_names:
+            print(f"[matching] Groq API returned unknown template '{matched_name}' — using difflib")
+            return None
+
+        print(f"[matching] Groq API: '{matched_name}' at {confidence}%")
+
+        return {
+            "matched_name": matched_name,
+            "confidence":   confidence,
+            "method":       "AI",    # saved to automation_events.match_method
+            "ai_used":      True,    # ai_fallback_used = False in DB
+        }
+
+    except Exception as e:
+        print(f"[matching] Groq API error: {e} — using difflib")
+        return None
 
 
 # ══════════════════════════════════════════════════════════════
@@ -305,11 +384,11 @@ async def match_item_to_template(
 
     template_names = [t["name"] for t in templates]
 
-    # ── Try Models API first (when enabled) ──
+    # ── Try Groq AI first ──
     result = None
-    if USE_MODELS_API:
+    if USE_AI_MATCHING:
         try:
-            result = await _models_api_match(item_name, template_names, access_token)
+            result = await _ai_semantic_match(item_name, template_names)
         except Exception:
             result = None   # fall through to fuzzy
 

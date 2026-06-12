@@ -255,6 +255,14 @@ async def keep_alive():
         except Exception as e:
             print(f"[Keep-Alive] Ping failed: {e}")
 
+from app.services.worker import run_worker
+
 @app.on_event("startup")
 async def startup_event():
+    # Start the keep-alive ping for the free tier
     asyncio.create_task(keep_alive())
+    
+    # Start the background worker inside the web server process
+    # so we don't have to pay for a separate worker instance on Render!
+    print("[startup] Starting embedded background worker...")
+    asyncio.create_task(run_worker())
