@@ -22,7 +22,7 @@ from app.services.settings import get_workspace_uuid_for_request, get_subitems_f
 from app.schemas.templates import (
     TemplateCreateRequest, TemplateUpdateRequest,
     TemplateResponse,      TemplatesListResponse,
-    SubitemResponse,       TestAIRequest,
+    SubitemResponse,       AIRequest,
 )
 from app.services.matching_services import _ai_semantic_match
 
@@ -48,36 +48,58 @@ async def create_template(
     """
     workspace_uuid = get_workspace_uuid_for_request(request, workspaceId, db)
 
-    # ── Insert template row ──
-    try:
-        t_result = db.table("templates") \
-            .insert({
-                "workspace_id": workspace_uuid,
-                "name":         body.name,
-                "source":       "MANUAL",
-                "is_active":    True,
-                "is_deleted":   False,
-            }) \
-            .execute()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create template: {str(e)}")
+    # ── Check if template already exists ──
+    existing = db.table("templates") \
+        .select("*") \
+        .eq("workspace_id", workspace_uuid) \
+        .eq("name", body.name) \
+        .is_("deleted_at", "null") \
+        .execute()
 
-    template    = t_result.data[0]
-    template_id = template["id"]
+    if existing.data:
+        template    = existing.data[0]
+        template_id = template["id"]
+        is_new      = False
+    else:
+        # ── Insert template row ──
+        try:
+            t_result = db.table("templates") \
+                .insert({
+                    "workspace_id": workspace_uuid,
+                    "name":         body.name,
+                    "source":       "MANUAL",
+                    "is_active":    True,
+                    "is_deleted":   False,
+                }) \
+                .execute()
+            template    = t_result.data[0]
+            template_id = template["id"]
+            is_new      = True
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to create template: {str(e)}")
 
     # ── Insert subitems (order matters) ──
     if body.subitems:
-        subitems_to_insert = [
-            {
+        start_idx = 0
+        if not is_new:
+            # Find the highest existing sort_order
+            existing_subs = get_subitems_for_template(template_id, db)
+            if existing_subs:
+                start_idx = max((s["sort_order"] for s in existing_subs if s.get("sort_order") is not None), default=-1) + 1
+
+        subitems_to_insert = []
+        for idx, sub in enumerate(body.subitems):
+            sort_order = sub.sort_order if sub.sort_order is not None else (start_idx + idx)
+            subitems_to_insert.append({
                 "template_id": template_id,
                 "name":        sub.name,
-                "sort_order":  sub.sort_order if sub.sort_order is not None else idx,
-            }
-            for idx, sub in enumerate(body.subitems)
-        ]
+                "sort_order":  sort_order,
+            })
+            
         try:
             db.table("template_subitems").insert(subitems_to_insert).execute()
         except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to create subitems: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Failed to create subitems: {str(e)}")
 
     subitems = get_subitems_for_template(template_id, db)
@@ -388,48 +410,32 @@ async def delete_template(
 
     return {"success": True, "message": "Template deleted successfully"}
 # ─────────────────────────────────────────
-# POST /api/test-ai-match/{workspaceId}
+# POST /api/ai-match/{workspaceId}
 # ─────────────────────────────────────────
-@router.post("/test-ai-match/{workspaceId}")
-async def test_ai_match(
+@router.post("/ai-match/{workspaceId}")
+async def ai_match(
     request:     Request,
     workspaceId: str,
-    body:        TestAIRequest,
+    body:        AIRequest,
     db:          Client = Depends(get_db),
 ):
     """
-    Test the Groq AI matching directly!
+    The Groq AI matching directly!
     Pass any item_name to see which template the AI picks.
     """
     workspace_uuid = get_workspace_uuid_for_request(request, workspaceId, db)
 
-    # Fetch all active templates
-    t_result = db.table("templates") \
-        .select("name") \
-        .eq("workspace_id", workspace_uuid) \
-        .is_("deleted_at", "null") \
-        .execute()
-    
-    templates = t_result.data or []
-    template_names = [t["name"] for t in templates]
-
-    if not template_names:
-        return {"error": "No templates found in this workspace to match against!"}
-
-    # Run AI match
-    result = await _ai_semantic_match(body.item_name, template_names)
+    # Run AI generation
+    from app.services.matching_services import generate_template_from_ai
+    result = await generate_template_from_ai(body.item_name)
     
     if result:
         return {
-            "status": "SUCCESS",
-            "item_tested": body.item_name,
+            "item": body.item_name,
             "ai_result": result,
-            "templates_available": template_names
         }
     else:
         return {
-            "status": "FAILED",
-            "item_tested": body.item_name,
-            "error": "AI failed or returned None. It would fall back to difflib in production.",
-            "templates_available": template_names
+            "item": body.item_name,
+            "error": "AI failed to generate a template.",
         }

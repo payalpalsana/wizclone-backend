@@ -272,6 +272,76 @@ async def _ai_semantic_match(
         print(f"[matching] Groq API error: {e} — using difflib")
         return None
 
+async def generate_template_from_ai(item_name: str) -> dict | None:
+    """
+    Pure AI Generator for the frontend.
+    Generates a template name and subitems based on the item name without looking at DB templates.
+    """
+    from app.core.config import settings
+    import httpx
+
+    if not settings.groq_api_key:
+        return None
+
+    prompt = (
+        f"You are an intelligent task management assistant.\n"
+        f"Given a user prompt/item name, generate a categorized 'Template Name' "
+        f"that describes this type of work.\n"
+        f"ALSO, dynamically generate 3 to 5 specific subtasks to complete this item.\n\n"
+        f"User Prompt: {item_name}\n\n"
+        f"Reply with ONLY this format (nothing else):\n"
+        f"<Generated Template Name>\n"
+        f"- <subtask 1>\n"
+        f"- <subtask 2>\n"
+        f"- <subtask 3>\n\n"
+        f"Example:\n"
+        f"Marketing Campaign\n"
+        f"- Conduct market research\n"
+        f"- Draft ad copy\n"
+        f"- Launch ads"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.groq_api_key}",
+                    "Content-Type":  "application/json",
+                },
+                json={
+                    "model":      "llama-3.1-8b-instant",
+                    "messages":   [{"role": "user", "content": prompt}],
+                    "max_tokens": 150,
+                },
+            )
+
+        if response.status_code != 200:
+            return None
+
+        text  = response.json()["choices"][0]["message"]["content"].strip()
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+
+        if not lines:
+            return None
+
+        # First line is Template Name
+        suggested_name = lines[0].strip()
+        
+        # Following lines with '-' are subitems
+        ai_subitems = []
+        for line in lines[1:]:
+            if line.startswith("-"):
+                ai_subitems.append(line.lstrip("- ").strip())
+
+        return {
+            "suggested_item_name": suggested_name,
+            "ai_suggested_subitems": ai_subitems,
+        }
+
+    except Exception:
+        return None
+
 
 # ══════════════════════════════════════════════════════════════
 # PRIMARY ENGINE — difflib fuzzy matching
