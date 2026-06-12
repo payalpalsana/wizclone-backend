@@ -60,6 +60,7 @@ async def create_template(
         template    = existing.data[0]
         template_id = template["id"]
         is_new      = False
+        print(f"[Template API] Template '{body.name}' already exists (ID: {template_id}). Appending subitems.")
     else:
         # ── Insert template row ──
         try:
@@ -75,32 +76,49 @@ async def create_template(
             template    = t_result.data[0]
             template_id = template["id"]
             is_new      = True
+            print(f"[Template API] Created new template '{body.name}' (ID: {template_id}).")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to create template: {str(e)}")
 
     # ── Insert subitems (order matters) ──
     if body.subitems:
         start_idx = 0
+        existing_names = set()
         if not is_new:
-            # Find the highest existing sort_order
+            # Find the highest existing sort_order and collect existing names
             existing_subs = get_subitems_for_template(template_id, db)
             if existing_subs:
                 start_idx = max((s["sort_order"] for s in existing_subs if s.get("sort_order") is not None), default=-1) + 1
+                existing_names = {s["name"].strip().lower() for s in existing_subs if s.get("name")}
+                print(f"[Template API] Found {len(existing_names)} existing subitems. Starting new sort_order at {start_idx}.")
 
         subitems_to_insert = []
-        for idx, sub in enumerate(body.subitems):
-            sort_order = sub.sort_order if sub.sort_order is not None else (start_idx + idx)
+        for sub in body.subitems:
+            # Skip if subitem name already exists
+            sub_clean_name = sub.name.strip().lower()
+            if sub_clean_name in existing_names:
+                print(f"[Template API]   ⚠️ Skipping duplicate subitem: '{sub.name}'")
+                continue
+            
+            sort_order = sub.sort_order if sub.sort_order is not None else start_idx
             subitems_to_insert.append({
                 "template_id": template_id,
                 "name":        sub.name,
                 "sort_order":  sort_order,
             })
             
-        try:
-            db.table("template_subitems").insert(subitems_to_insert).execute()
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to create subitems: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Failed to create subitems: {str(e)}")
+            # Keep track so we don't insert duplicates within the same request
+            existing_names.add(sub_clean_name)
+            if sub.sort_order is None:
+                start_idx += 1
+            
+        if subitems_to_insert:
+            print(f"[Template API] Inserting {len(subitems_to_insert)} unique subitems...")
+            try:
+                db.table("template_subitems").insert(subitems_to_insert).execute()
+                print(f"[Template API] Successfully inserted subitems.")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to create subitems: {str(e)}")
 
     subitems = get_subitems_for_template(template_id, db)
 
