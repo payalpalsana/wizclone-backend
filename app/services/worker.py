@@ -193,11 +193,16 @@ async def process_job(job: dict):
             await _complete_job(job_id)
             return
 
+        print(f"[Worker] Fetching {len(subitems)} subitems for template '{template_name}':")
+        for idx, sub in enumerate(subitems):
+            print(f"  {idx+1}. {sub.get('name', '')} (order: {sub.get('sort_order', '')})")
+
         # ── Step 8: C-05 — Create each subitem on monday.com ──
         copied_count = 0
         failed_count = 0
         failed_names = []
 
+        print(f"[Worker] Commencing monday.com copy process...")
         for subitem in subitems:
             subitem_name = subitem.get("name", "").strip()
             if not subitem_name:

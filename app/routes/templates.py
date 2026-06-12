@@ -22,8 +22,9 @@ from app.services.settings import get_workspace_uuid_for_request, get_subitems_f
 from app.schemas.templates import (
     TemplateCreateRequest, TemplateUpdateRequest,
     TemplateResponse,      TemplatesListResponse,
-    SubitemResponse,
+    SubitemResponse,       TestAIRequest,
 )
+from app.services.matching_services import _ai_semantic_match
 
 router = APIRouter(prefix="/api", tags=["Templates"])
 
@@ -386,3 +387,49 @@ async def delete_template(
         pass   # Non-critical — template is already deleted
 
     return {"success": True, "message": "Template deleted successfully"}
+# ─────────────────────────────────────────
+# POST /api/test-ai-match/{workspaceId}
+# ─────────────────────────────────────────
+@router.post("/test-ai-match/{workspaceId}")
+async def test_ai_match(
+    request:     Request,
+    workspaceId: str,
+    body:        TestAIRequest,
+    db:          Client = Depends(get_db),
+):
+    """
+    Test the Groq AI matching directly!
+    Pass any item_name to see which template the AI picks.
+    """
+    workspace_uuid = get_workspace_uuid_for_request(request, workspaceId, db)
+
+    # Fetch all active templates
+    t_result = db.table("templates") \
+        .select("name") \
+        .eq("workspace_id", workspace_uuid) \
+        .is_("deleted_at", "null") \
+        .execute()
+    
+    templates = t_result.data or []
+    template_names = [t["name"] for t in templates]
+
+    if not template_names:
+        return {"error": "No templates found in this workspace to match against!"}
+
+    # Run AI match
+    result = await _ai_semantic_match(body.item_name, template_names)
+    
+    if result:
+        return {
+            "status": "SUCCESS",
+            "item_tested": body.item_name,
+            "ai_result": result,
+            "templates_available": template_names
+        }
+    else:
+        return {
+            "status": "FAILED",
+            "item_tested": body.item_name,
+            "error": "AI failed or returned None. It would fall back to difflib in production.",
+            "templates_available": template_names
+        }

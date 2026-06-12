@@ -78,3 +78,5 @@ class TemplatesListResponse(BaseModel):
     limit:        int
     total_pages:  int
     templates:    List[TemplateResponse]
+class TestAIRequest(BaseModel):
+    item_name: str
