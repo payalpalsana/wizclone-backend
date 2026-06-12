@@ -1,4 +1,5 @@
 # app/core/config.py
+from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
