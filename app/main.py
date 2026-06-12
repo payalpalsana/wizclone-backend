@@ -14,6 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+import asyncio
+import httpx
 
 from app.core.database  import db
 from app.core.security  import verify_session_token
@@ -237,3 +239,22 @@ async def list_routes():
         {"path": r.path, "methods": list(r.methods)}
         for r in app.routes
     ]
+
+# ─────────────────────────────────────────
+# Keep-Alive Task (Render Free Tier)
+# ─────────────────────────────────────────
+async def keep_alive():
+    """Background task to ping the server every 10 minutes (600 seconds) so Render doesn't sleep."""
+    url = "https://wizclone-backend.onrender.com/health"
+    while True:
+        await asyncio.sleep(600)
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.get(url, timeout=10)
+            print(f"[Keep-Alive] Pinged {url} to keep server awake.")
+        except Exception as e:
+            print(f"[Keep-Alive] Ping failed: {e}")
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(keep_alive())
