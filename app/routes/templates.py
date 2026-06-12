@@ -121,39 +121,50 @@ async def list_templates(
     workspace_uuid = get_workspace_uuid_for_request(request, workspaceId, db)
     offset         = (page - 1) * limit
 
-    # ── Build query with optional search filter ──
     try:
-        query = db.table("templates") \
-            .select("id, name, usage_count, created_at", count="exact") \
+        # ── 1. Get total count ──
+        count_query = db.table("templates") \
+            .select("id", count="exact") \
             .eq("workspace_id", workspace_uuid) \
             .eq("is_deleted",   False) \
-            .eq("is_active",    True) \
-            .order("created_at", desc=False) \
-            .range(offset, offset + limit - 1)
+            .eq("is_active",    True)
 
-        # Apply search filter if provided
-        # ilike = case-insensitive LIKE — matches partial names
-        # e.g. search="client" matches "New Client Onboarding", "Client Setup" etc.
         if search and search.strip():
-            query = query.ilike("name", f"%{search.strip()}%")
+            count_query = count_query.ilike("name", f"%{search.strip()}%")
+            
+        count_result = count_query.execute()
+        total = count_result.count or 0
+        total_pages = max(1, -(-total // limit))
 
-        result = query.execute()
+        # ── 2. Fetch paginated data safely ──
+        if offset >= total and total > 0:
+            templates = []
+        else:
+            data_query = db.table("templates") \
+                .select("id, name, usage_count, created_at") \
+                .eq("workspace_id", workspace_uuid) \
+                .eq("is_deleted",   False) \
+                .eq("is_active",    True) \
+                .order("created_at", desc=False) \
+                .range(offset, offset + limit - 1)
+
+            if search and search.strip():
+                data_query = data_query.ilike("name", f"%{search.strip()}%")
+
+            result = data_query.execute()
+            templates = result.data or []
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch templates: {str(e)}")
-
-    templates   = result.data or []
-    total       = result.count or 0
-    total_pages = max(1, -(-total // limit))  # ceiling division
 
     # ── Return empty response if no templates found ──
     if not templates:
         return TemplatesListResponse(
             workspace_id = workspaceId,
-            total        = 0,
+            total        = total,
             page         = page,
             limit        = limit,
-            total_pages  = 1,
+            total_pages  = total_pages,
             templates    = [],
         )
 
