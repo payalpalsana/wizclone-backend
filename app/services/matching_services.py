@@ -204,8 +204,8 @@ async def _ai_semantic_match(
     from app.core.config import settings
     import httpx
 
-    if not settings.groq_api_key:
-        print("[matching] No GROQ_API_KEY found — falling back to difflib")
+    if not settings.groq_api_key and not settings.deepseek_api_key:
+        print("[matching] No AI keys found — falling back to difflib")
         return None
 
     # Build candidate list for the prompt
@@ -223,27 +223,61 @@ async def _ai_semantic_match(
         f"Example: New Client Onboarding | 87"
     )
 
+    response_text = None
+
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.groq_api_key}",
-                    "Content-Type":  "application/json",
-                },
-                json={
-                    "model":      "llama-3.1-8b-instant",
-                    "messages":   [{"role": "user", "content": prompt}],
-                    "max_tokens": 50,
-                },
-            )
+        if settings.groq_api_key:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.groq_api_key}",
+                        "Content-Type":  "application/json",
+                    },
+                    json={
+                        "model":      "llama-3.1-8b-instant",
+                        "messages":   [{"role": "user", "content": prompt}],
+                        "max_tokens": 50,
+                    },
+                )
+            if response.status_code == 200:
+                response_text = response.json()["choices"][0]["message"]["content"].strip()
+            else:
+                print(f"[matching] Groq API {response.status_code} error.")
+    except Exception as e:
+        print(f"[matching] Groq API exception: {e}")
 
-        if response.status_code != 200:
-            print(f"[matching] Groq API {response.status_code} — using difflib")
-            return None
+    # Fallback to DeepSeek if Groq failed
+    if not response_text and settings.deepseek_api_key:
+        print("[matching] Falling back to DeepSeek API...")
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(
+                    "https://api.deepseek.com/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.deepseek_api_key}",
+                        "Content-Type":  "application/json",
+                    },
+                    json={
+                        "model":      "deepseek-chat",
+                        "messages":   [{"role": "user", "content": prompt}],
+                        "max_tokens": 50,
+                    },
+                )
+            if response.status_code == 200:
+                response_text = response.json()["choices"][0]["message"]["content"].strip()
+            else:
+                print(f"[matching] DeepSeek API {response.status_code} error.")
+        except Exception as e:
+            print(f"[matching] DeepSeek API exception: {e}")
 
+    if not response_text:
+        print("[matching] Both AI APIs failed — using difflib")
+        return None
+
+    try:
         # Parse response — expected: "Template Name | 87"
-        text  = response.json()["choices"][0]["message"]["content"].strip()
+        text  = response_text
         parts = text.split("|")
 
         if len(parts) != 2:
@@ -280,7 +314,7 @@ async def generate_template_from_ai(item_name: str) -> dict | None:
     from app.core.config import settings
     import httpx
 
-    if not settings.groq_api_key:
+    if not settings.groq_api_key and not settings.deepseek_api_key:
         return None
 
     prompt = (
@@ -301,25 +335,59 @@ async def generate_template_from_ai(item_name: str) -> dict | None:
         f"- Launch ads"
     )
 
+    response_text = None
+
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.groq_api_key}",
-                    "Content-Type":  "application/json",
-                },
-                json={
-                    "model":      "llama-3.1-8b-instant",
-                    "messages":   [{"role": "user", "content": prompt}],
-                    "max_tokens": 150,
-                },
-            )
+        if settings.groq_api_key:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.groq_api_key}",
+                        "Content-Type":  "application/json",
+                    },
+                    json={
+                        "model":      "llama-3.1-8b-instant",
+                        "messages":   [{"role": "user", "content": prompt}],
+                        "max_tokens": 150,
+                    },
+                )
+            if response.status_code == 200:
+                response_text = response.json()["choices"][0]["message"]["content"].strip()
+            else:
+                print(f"[generate] Groq API {response.status_code} error.")
+    except Exception as e:
+        print(f"[generate] Groq API exception: {e}")
 
-        if response.status_code != 200:
-            return None
+    # Fallback to DeepSeek if Groq failed
+    if not response_text and settings.deepseek_api_key:
+        print("[generate] Falling back to DeepSeek API...")
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(
+                    "https://api.deepseek.com/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.deepseek_api_key}",
+                        "Content-Type":  "application/json",
+                    },
+                    json={
+                        "model":      "deepseek-chat",
+                        "messages":   [{"role": "user", "content": prompt}],
+                        "max_tokens": 150,
+                    },
+                )
+            if response.status_code == 200:
+                response_text = response.json()["choices"][0]["message"]["content"].strip()
+            else:
+                print(f"[generate] DeepSeek API {response.status_code} error.")
+        except Exception as e:
+            print(f"[generate] DeepSeek API exception: {e}")
 
-        text  = response.json()["choices"][0]["message"]["content"].strip()
+    if not response_text:
+        return None
+
+    try:
+        text  = response_text
         lines = [line.strip() for line in text.split("\n") if line.strip()]
 
         if not lines:

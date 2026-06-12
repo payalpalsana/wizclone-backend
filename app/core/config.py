@@ -22,7 +22,8 @@ class Settings(BaseSettings):
     app_base_url: str   # e.g. https://g4j5rg19-8000.inc1.devtunnels.ms — used to build webhook URLs
     
     # ── AI Matching ──
-    groq_api_key: str | None = None
+    groq_api_key: Optional[str] = None
+    deepseek_api_key: Optional[str] = None
 
     # ── monday.com OAuth endpoints ──
     monday_authorize_url: str    # "https://auth.monday.com/oauth2/authorize"
