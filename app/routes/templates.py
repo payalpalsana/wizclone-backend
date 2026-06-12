@@ -428,9 +428,9 @@ async def delete_template(
 
     return {"success": True, "message": "Template deleted successfully"}
 # ─────────────────────────────────────────
-# POST /api/ai-match/{workspaceId}
+# POST /api/ai-suggestions/{workspaceId}
 # ─────────────────────────────────────────
-@router.post("/ai-match/{workspaceId}")
+@router.post("/ai-suggestions/{workspaceId}")
 async def ai_match(
     request:     Request,
     workspaceId: str,
